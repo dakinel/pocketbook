@@ -1,0 +1,313 @@
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Fraunces", Georgia, Cambria, "Times New Roman", serif;
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root {
+  --w: clamp(136px, 16.5vw, 206px);
+  --noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85 .05' numOctaves='3' seed='4'/%3E%3CfeColorMatrix values='0 0 0 0 .04 0 0 0 0 .09 0 0 0 0 .2 0 0 0 1.2 -.4'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --stitch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 120' preserveAspectRatio='none'%3E%3Cdefs%3E%3CradialGradient id='r' cx='.35' cy='.3' r='.8'%3E%3Cstop offset='0' stop-color='%23f6c58e'/%3E%3Cstop offset='.5' stop-color='%23b8602a'/%3E%3Cstop offset='1' stop-color='%236b3010'/%3E%3C/radialGradient%3E%3Cg id='t' fill='none' stroke-dasharray='2.4 1' stroke-width='.9'%3E%3Cpath d='M5 9.5H95M5 12.8H95'/%3E%3Cpath d='M8.5 17V68.1L50 109.6L91.5 68.1V17'/%3E%3Cpath d='M12 36C30 60 44 74 50 90C56 74 70 60 88 36'/%3E%3Cpath d='M12 43C29 64 43 78 50 97C57 78 71 64 88 43'/%3E%3C/g%3E%3C/defs%3E%3Cpath d='M4 15.6H96' stroke='%230a1a2e' stroke-width='1.4' opacity='.45'/%3E%3Cpath d='M4 6.4H96' stroke='%23a9cdf0' stroke-width='.8' opacity='.5'/%3E%3Cuse href='%23t' x='.3' y='.5' stroke='%230a1a2e' opacity='.55'/%3E%3Cuse href='%23t' stroke='%23e0a53f'/%3E%3Ccircle cx='8' cy='11.2' r='2.4' fill='url(%23r)' stroke='%2345200a' stroke-width='.5'/%3E%3Ccircle cx='92' cy='11.2' r='2.4' fill='url(%23r)' stroke='%2345200a' stroke-width='.5'/%3E%3C/svg%3E");
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    scroll-padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-serif);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.denim-canvas {
+  min-height: 100vh;
+  padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
+  background:
+    radial-gradient(ellipse at 50% 30%, transparent 40%, rgba(0, 0, 0, 0.45)),
+    var(--noise),
+    repeating-linear-gradient(
+      63deg,
+      rgba(255, 255, 255, 0.05) 0 1.5px,
+      rgba(0, 0, 0, 0.1) 1.5px 3px
+    ),
+    #1d3a5c;
+  background-size: 100% 100%, 240px 240px, auto, auto;
+}
+
+.pocket-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: calc(var(--w) * 0.98 + 24px) calc(var(--w) * 0.28);
+  margin: 0 auto;
+  max-width: 1320px;
+  padding: calc(var(--w) * 0.85) 28px calc(var(--w) * 0.75);
+  list-style: none;
+}
+
+.jean-pocket {
+  position: relative;
+  width: var(--w);
+  height: calc(var(--w) * 1.2);
+  isolation: isolate;
+  transform: rotate(var(--r, 0deg));
+  filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.5));
+}
+
+.jean-pocket:nth-child(2n) {
+  margin-top: calc(var(--w) * 0.14);
+}
+
+.jean-pocket:nth-child(5n + 1) { --r: -1.8deg; --t: 2.6deg; }
+.jean-pocket:nth-child(5n + 2) { --r: 1.4deg; --t: -3.2deg; }
+.jean-pocket:nth-child(5n + 3) { --r: -0.9deg; --t: 1.8deg; }
+.jean-pocket:nth-child(5n + 4) { --r: 1.9deg; --t: -1.6deg; }
+.jean-pocket:nth-child(5n + 5) { --r: -0.4deg; --t: 3.4deg; }
+
+.jean-pocket::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  clip-path: polygon(4% 5%, 96% 5%, 96% 58%, 50% 97%, 4% 58%);
+  -webkit-clip-path: polygon(4% 5%, 96% 5%, 96% 58%, 50% 97%, 4% 58%);
+  background-image:
+    var(--stitch),
+    var(--noise),
+    repeating-linear-gradient(
+      63deg,
+      rgba(255, 255, 255, 0.08) 0 1.5px,
+      rgba(0, 0, 0, 0.1) 1.5px 3px
+    ),
+    radial-gradient(ellipse at 50% 38%, rgba(160, 200, 235, 0.38), transparent 62%),
+    linear-gradient(180deg, #3f71ab, #2d5788 70%, #234775);
+  background-size: 100% 100%, 240px 240px, auto, 100% 100%, 100% 100%;
+  background-repeat: no-repeat, repeat, repeat, no-repeat, no-repeat;
+}
+
+.jean-pocket:nth-child(3n)::after {
+  filter: brightness(1.18) saturate(0.8);
+}
+
+.jean-pocket:nth-child(4n + 1)::after {
+  filter: brightness(0.82) saturate(1.1);
+}
+
+.jean-pocket:nth-child(5n)::after {
+  filter: brightness(1.35) saturate(0.6) hue-rotate(-6deg);
+}
+
+.jean-pocket:nth-child(7n)::after {
+  filter: brightness(0.66) saturate(1.2);
+}
+
+.pocket-book {
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  bottom: 70%;
+  width: 66%;
+  height: calc(var(--w) * 0.94);
+  transform: translateX(-50%) rotate(var(--t, 0deg));
+  transform-origin: 50% 100%;
+  transition: transform 0.35s cubic-bezier(0.3, 1.4, 0.5, 1);
+  border-radius: 3px 5px 2px 2px;
+  box-shadow:
+    inset 4px 0 6px rgba(0, 0, 0, 0.28),
+    0 4px 12px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.jean-pocket:hover .pocket-book,
+.jean-pocket:focus-within .pocket-book {
+  transform: translateX(-50%) translateY(-12%) rotate(calc(var(--t, 0deg) + 3deg));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pocket-book,
+  .flip-page,
+  .pageFoldRight,
+  .pageFoldLeft {
+    transition: none !important;
+  }
+}
+
+.bookWrapper {
+  width: 100%;
+  max-width: 1040px;
+  height: min(74vh, 660px);
+  margin: 0 auto;
+}
+
+.bookBg {
+  position: relative;
+  background: linear-gradient(145deg, #1b1815 0%, #0d0c0a 100%);
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  box-shadow:
+    0 24px 55px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.pageBg {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background-color: #d7d2c8;
+  width: calc(100% - 24px);
+  height: calc(100% - 24px);
+  border-radius: 2px;
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.18);
+}
+
+.pageWrapper {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 50%;
+  height: 100%;
+  z-index: 5;
+  perspective: 1800px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.baseLeft {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50%;
+  height: 100%;
+  z-index: 1;
+  overflow: hidden;
+  background: linear-gradient(
+    to right,
+    #ffffff 0%,
+    #ffffff 92%,
+    #f5f3ee 97%,
+    #d4d0c7 100%
+  );
+}
+
+.baseRight {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 50%;
+  height: 100%;
+  z-index: 1;
+  overflow: hidden;
+  background: linear-gradient(
+    to right,
+    #d4d0c7 0%,
+    #f5f3ee 3%,
+    #ffffff 8%,
+    #ffffff 100%
+  );
+}
+
+.flip-page {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transform-origin: -1px center;
+  transition: transform 0.8s cubic-bezier(0.24, 1, 0.34, 1);
+  cursor: pointer;
+}
+
+.flip-page.is-flipped {
+  transform: rotateY(-180deg);
+}
+
+.flip-page.is-right {
+  transform: rotateY(0deg);
+}
+
+.pageFace {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.pageFace.front {
+  background: linear-gradient(
+    to right,
+    #d4d0c7 0%,
+    #f5f3ee 3%,
+    #ffffff 8%,
+    #ffffff 100%
+  );
+}
+
+.pageFace.back {
+  transform: rotateY(-180deg);
+  background: linear-gradient(
+    to right,
+    #ffffff 0%,
+    #ffffff 92%,
+    #f5f3ee 97%,
+    #d4d0c7 100%
+  );
+}
+
+.pageFoldRight {
+  position: absolute;
+  width: 0px;
+  height: 0px;
+  top: 0;
+  right: 0;
+  pointer-events: none;
+  border-left: 1px solid #d6d3cb;
+  border-bottom: 1px solid #d6d3cb;
+  box-shadow: -5px 5px 10px rgba(0, 0, 0, 0.14);
+  background-image: linear-gradient(
+    45deg,
+    #e8e5dc 0%,
+    #f3f1eb 48%,
+    #ffffff 50%,
+    #ffffff 100%
+  );
+  transition: width 0.25s ease, height 0.25s ease;
+}
+
+.pageFace.front:hover .pageFoldRight {
+  width: 48px;
+  height: 48px;
+}
+
+.pageFoldLeft {
+  position: absolute;
+  width: 0px;
+  height: 0px;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  border-right: 1px solid #d6d3cb;
+  border-bottom: 1px solid #d6d3cb;
+  box-shadow: 5px 5px 10px rgba(0, 0, 0, 0.14);
+  background-image: linear-gradient(
+    135deg,
+    #ffffff 0%,
+    #ffffff 50%,
+    #f3f1eb 52%,
+    #e8e5dc 100%
+  );
+  transition: width 0.25s ease, height 0.25s ease;
+}
+
+.pageFace.back:hover .pageFoldLeft {
+  width: 48px;
+  height: 48px;
+}
+

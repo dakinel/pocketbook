@@ -1,0 +1,8 @@
+{
+  "name": "Folio Vault",
+  "description": "Find, verify, and store free public-domain financial classic PDFs and personal editions in a local reading vault.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
