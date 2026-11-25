@@ -3,7 +3,7 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-const DB_NAME = 'folio-cover-cache-v1';
+const DB_NAME = 'folio-cover-cache-v4';
 const STORE_NAME = 'covers';
 const memoryCache = new Map<string, string>();
 const inFlight = new Map<string, Promise<string>>();
@@ -17,7 +17,7 @@ interface QueueJob {
 
 const jobQueue: QueueJob[] = [];
 let activeWorkers = 0;
-const MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 2;
 
 function makeCacheKey(bookId: string, sizeBytes: number): string {
   return `${bookId}:${sizeBytes}`;
@@ -78,12 +78,13 @@ async function writeToDb(key: string, value: string): Promise<void> {
   });
 }
 
-function isCanvasMostlyBlank(canvas: HTMLCanvasElement): boolean {
+function isCanvasBlankOrStampOnly(canvas: HTMLCanvasElement): boolean {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return false;
   const { width, height } = canvas;
   const sample = ctx.getImageData(0, 0, width, height).data;
   let nonWhitePixels = 0;
+  let colorPixels = 0;
   const step = 16; // sample every 4th pixel for speed
   let totalSampled = 0;
   for (let i = 0; i < sample.length; i += step) {
@@ -91,11 +92,36 @@ function isCanvasMostlyBlank(canvas: HTMLCanvasElement): boolean {
     const r = sample[i];
     const g = sample[i + 1];
     const b = sample[i + 2];
-    if (r < 236 || g < 236 || b < 236) {
+    if (r < 232 || g < 232 || b < 232) {
       nonWhitePixels += 1;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      if (spread > 18) {
+        colorPixels += 1;
+      }
     }
   }
-  return totalSampled > 0 && nonWhitePixels / totalSampled < 0.008;
+  if (totalSampled === 0) return false;
+  const inkRatio = nonWhitePixels / totalSampled;
+  const colorRatio = colorPixels / totalSampled;
+  if (inkRatio < 0.025) return true;
+  if (inkRatio < 0.14 && colorRatio < 0.004) return true;
+  return false;
+}
+
+async function isBoilerplateFrontPage(page: pdfjsLib.PDFPageProxy): Promise<boolean> {
+  try {
+    const content = await page.getTextContent();
+    const text = content.items
+      .map((item) => ('str' in item ? item.str : ''))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .slice(0, 1200);
+    return /digital\s+copy\s+of\s+a\s+book|google\s+book\s+search|generated\s+by\s+google|books\.google\.com|scanned\s+by\s+google|there\s+are\s+no\s+known\s+copyright|cornell\s+university\s+library|baker\s+library|ex\s+libris|table\s+of\s+contents/i.test(
+      text
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function renderCoverFromPdf(bookId: string): Promise<string> {
@@ -113,11 +139,16 @@ async function renderCoverFromPdf(bookId: string): Promise<string> {
 
   try {
     const doc = await loadingTask.promise;
-    const maxCheck = Math.min(doc.numPages, 4);
+    const maxCheck = Math.min(doc.numPages, 7);
     let chosenDataUrl = '';
 
     for (let pageNum = 1; pageNum <= maxCheck; pageNum++) {
       const page = await doc.getPage(pageNum);
+      const isBoilerplate = await isBoilerplateFrontPage(page);
+      if (isBoilerplate) {
+        continue;
+      }
+
       const baseViewport = page.getViewport({ scale: 1 });
       const targetScale = Math.max(0.25, Math.min(0.9, 340 / Math.max(1, baseViewport.width)));
       const viewport = page.getViewport({ scale: targetScale });
@@ -139,19 +170,41 @@ async function renderCoverFromPdf(bookId: string): Promise<string> {
       }
 
       const finalCanvas = outCtx ? outputCanvas : canvas;
-      chosenDataUrl = finalCanvas.toDataURL('image/jpeg', 0.86);
+      const isBlankOrStamp = isCanvasBlankOrStampOnly(finalCanvas);
+      const dataUrl = isBlankOrStamp ? '' : finalCanvas.toDataURL('image/jpeg', 0.84);
 
-      if (!isCanvasMostlyBlank(finalCanvas)) {
+      canvas.width = 0;
+      canvas.height = 0;
+      outputCanvas.width = 0;
+      outputCanvas.height = 0;
+
+      if (dataUrl) {
+        chosenDataUrl = dataUrl;
         break;
       }
     }
 
     if (!chosenDataUrl) {
-      throw new Error('Empty PDF cover.');
+      throw new Error('No visual cover page available.');
     }
     return chosenDataUrl;
   } finally {
     void loadingTask.destroy();
+  }
+}
+
+async function persistCoverToServer(bookId: string, dataUrl: string): Promise<void> {
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    if (blob.size < 400 || blob.size > 300 * 1024) return;
+    await fetch(`/api/vault/${encodeURIComponent(bookId)}/cover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/jpeg' },
+      body: blob,
+    });
+  } catch {
+    // Non-critical server warm-up
   }
 }
 
@@ -164,6 +217,7 @@ function pumpQueue() {
       .then((dataUrl) => {
         memoryCache.set(job.cacheKey, dataUrl);
         void writeToDb(job.cacheKey, dataUrl);
+        void persistCoverToServer(job.bookId, dataUrl);
         job.resolve(dataUrl);
       })
       .catch((err) => {

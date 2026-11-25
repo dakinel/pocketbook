@@ -1,9 +1,13 @@
 import 'dotenv/config';
+import { execFile as execFileCb } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import express, { type Request, type Response } from 'express';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { createServer as createViteServer } from 'vite';
 import type {
   ArchiveInspection,
@@ -19,14 +23,209 @@ const PORT = Number(process.env.PORT) || 3000;
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
 const DATA_DIR = path.resolve(process.cwd(), 'data', 'vault');
 const VAULT_FILES_DIR = path.resolve(DATA_DIR, 'files');
+const VAULT_COVERS_DIR = path.resolve(DATA_DIR, 'covers');
 const CATALOG_PATH = path.resolve(DATA_DIR, 'catalog.json');
 const OVERRIDES_PATH = path.resolve(DATA_DIR, 'overrides.json');
 
 const LIBRARY_DIR = path.resolve(process.cwd(), 'library');
 const LIBRARY_BOOKS_DIR = path.resolve(LIBRARY_DIR, 'books');
+const LIBRARY_COVERS_DIR = path.resolve(LIBRARY_DIR, 'covers');
 const LIBRARY_CATALOG_PATH = path.resolve(LIBRARY_DIR, 'catalog.json');
 
 fs.mkdirSync(VAULT_FILES_DIR, { recursive: true });
+fs.mkdirSync(VAULT_COVERS_DIR, { recursive: true });
+fs.mkdirSync(LIBRARY_COVERS_DIR, { recursive: true });
+
+const execFileAsync = promisify(execFileCb);
+const GOOGLE_DISCLAIMER_RE =
+  /digital\s+copy\s+of\s+a\s+book|google\s+book\s+search|generated\s+by\s+google|books\.google\.com|scanned\s+by\s+google/i;
+const inFlightCovers = new Map<string, Promise<string | null>>();
+const unavailableCovers = new Set<string>();
+let activeCoverWorkers = 0;
+const coverWaitQueue: Array<() => void> = [];
+
+function resolveSafeCoverPath(baseDir: string, bookId: string): string {
+  if (!/^[a-zA-Z0-9_-]+$/.test(bookId)) {
+    throw new Error('Invalid book cover identifier.');
+  }
+  const resolved = path.resolve(baseDir, `${bookId}.jpg`);
+  if (!resolved.startsWith(baseDir + path.sep)) {
+    throw new Error('Resolved cover path escapes storage boundary.');
+  }
+  return resolved;
+}
+
+async function withCoverSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeCoverWorkers >= 2) {
+    await new Promise<void>((resolve) => {
+      coverWaitQueue.push(resolve);
+    });
+  }
+  activeCoverWorkers += 1;
+  try {
+    return await fn();
+  } finally {
+    activeCoverWorkers -= 1;
+    const next = coverWaitQueue.shift();
+    if (next) next();
+  }
+}
+
+async function pickFirstReadablePage(pdfPath: string): Promise<{ startPage: number; numPages: number }> {
+  const data = new Uint8Array(fs.readFileSync(pdfPath));
+  const loadingTask = pdfjsLib.getDocument({ data, verbosity: 0 });
+  try {
+    const doc = await loadingTask.promise;
+    const maxCheck = Math.min(doc.numPages, 7);
+    let startPage = 1;
+    for (let p = 1; p <= maxCheck; p++) {
+      const page = await doc.getPage(p);
+      const tc = await page.getTextContent();
+      const text = tc.items
+        .map((item) => ('str' in item ? item.str : ''))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .slice(0, 1000);
+      if (GOOGLE_DISCLAIMER_RE.test(text) && p < maxCheck) {
+        startPage = p + 1;
+      } else {
+        break;
+      }
+    }
+    return { startPage, numPages: doc.numPages };
+  } catch {
+    return { startPage: 1, numPages: 5 };
+  } finally {
+    await loadingTask.destroy().catch(() => {});
+  }
+}
+
+async function ensureServerPdfCover(
+  bookId: string,
+  pdfPath: string,
+  destDir: string
+): Promise<string | null> {
+  let outPath: string;
+  try {
+    outPath = resolveSafeCoverPath(destDir, bookId);
+  } catch {
+    return null;
+  }
+
+  if (unavailableCovers.has(outPath)) {
+    return null;
+  }
+
+  if (fs.existsSync(outPath) && fs.statSync(outPath).size > 400) {
+    return outPath;
+  }
+
+  const existing = inFlightCovers.get(outPath);
+  if (existing) return existing;
+
+  const job = withCoverSlot(async () => {
+    if (unavailableCovers.has(outPath)) return null;
+    if (fs.existsSync(outPath) && fs.statSync(outPath).size > 400) {
+      return outPath;
+    }
+    if (!fs.existsSync(pdfPath)) return null;
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'folio-cov-'));
+    try {
+      const { startPage, numPages } = await pickFirstReadablePage(pdfPath);
+      const lastPage = Math.min(numPages, startPage + 5);
+
+      await execFileAsync(
+        'gs',
+        [
+          '-dNOPAUSE',
+          '-dBATCH',
+          '-dSAFER',
+          '-dQUIET',
+          '-sDEVICE=jpeg',
+          '-dJPEGQ=86',
+          '-r96',
+          `-dFirstPage=${startPage}`,
+          `-dLastPage=${lastPage}`,
+          `-sOutputFile=${path.join(tmpDir, 'p-%d.jpg')}`,
+          pdfPath,
+        ],
+        { timeout: 25000 }
+      );
+
+      const files = fs
+        .readdirSync(tmpDir)
+        .filter((f) => f.endsWith('.jpg'))
+        .sort((a, b) => {
+          const na = Number(a.match(/\d+/)?.[0] || 0);
+          const nb = Number(b.match(/\d+/)?.[0] || 0);
+          return na - nb;
+        });
+
+      let chosen: string | null = null;
+      for (const f of files) {
+        const fp = path.join(tmpDir, f);
+        try {
+          const { stdout } = await execFileAsync('convert', [
+            fp,
+            '-colorspace',
+            'HSB',
+            '-format',
+            '%[fx:mean.g] %[fx:mean.b] %[fx:standard_deviation]',
+            'info:',
+          ]);
+          const [meanSat, meanBri, std] = stdout.trim().split(' ').map(Number);
+          const isBlankOrScan =
+            Number.isNaN(std) ||
+            std < 0.055 ||
+            meanBri > 0.985 ||
+            (meanBri > 0.91 && meanSat < 0.025);
+          if (!isBlankOrScan) {
+            chosen = f;
+            break;
+          }
+        } catch {
+          // Continue checking candidate pages
+        }
+      }
+
+      if (!chosen) {
+        unavailableCovers.add(outPath);
+        return null;
+      }
+
+      const tmpOut = path.join(tmpDir, 'final.jpg');
+      await execFileAsync('convert', [
+        path.join(tmpDir, chosen),
+        '-background',
+        'white',
+        '-alpha',
+        'remove',
+        '-alpha',
+        'off',
+        '-resize',
+        '340x',
+        '-strip',
+        '-quality',
+        '82',
+        tmpOut,
+      ]);
+
+      fs.copyFileSync(tmpOut, outPath);
+      return outPath;
+    } catch {
+      unavailableCovers.add(outPath);
+      return null;
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }).finally(() => {
+    inFlightCovers.delete(outPath);
+  });
+
+  inFlightCovers.set(outPath, job);
+  return job;
+}
 
 const ALLOWED_ARCHIVE_HOSTS = [
   'archive.org',
@@ -119,6 +318,10 @@ interface BookOverride {
   notes?: string;
   readingStatus?: ReadingStatus;
   hidden?: boolean;
+  lastPage?: number | null;
+  totalPages?: number | null;
+  bookmarkedPage?: number | null;
+  lastReadAt?: string | null;
 }
 
 function readBookListFromFile(catalogFilePath: string, filesDir: string): VaultBook[] {
@@ -181,6 +384,10 @@ function applyOverride(book: VaultBook, override?: BookOverride): VaultBook {
     ...book,
     ...(typeof override.notes === 'string' ? { notes: override.notes } : {}),
     ...(override.readingStatus ? { readingStatus: override.readingStatus } : {}),
+    ...(override.lastPage !== undefined ? { lastPage: override.lastPage } : {}),
+    ...(override.totalPages !== undefined ? { totalPages: override.totalPages } : {}),
+    ...(override.bookmarkedPage !== undefined ? { bookmarkedPage: override.bookmarkedPage } : {}),
+    ...(override.lastReadAt !== undefined ? { lastReadAt: override.lastReadAt } : {}),
   };
 }
 
@@ -333,68 +540,6 @@ function buildRequestedBooksCatalog(vault: VaultBook[]): RequestedBookSpec[] {
 
   return [
     {
-      bookKey: 'reminiscences-stock-operator',
-      accessionCode: 'FOL.1923.01',
-      title: 'Reminiscences of a Stock Operator',
-      subtitle: 'Fictionalized biography of market speculator Jesse Livermore',
-      author: 'Edwin Lefèvre',
-      year: 1923,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation:
-        'Originally published in 1923 by George H. Doran Company. Free, unencrypted Text PDF editions are openly downloadable from the Internet Archive and Wikimedia Commons.',
-      coverPath: '/src/assets/images/cover_stock_operator_1795617500977.jpg',
-      archiveIdentifier: 'JesseLivermoreReminiscencesOfAStockOperator',
-      alternateArchiveIdentifiers: ['reminiscencesofs0000edwi'],
-      preferredPdfFilename: 'Jesse Livermore Reminiscences Of A Stock Operator.pdf',
-      openLibraryUrl: 'https://openlibrary.org/works/OL15393933W/Reminiscences_of_a_Stock_Operator',
-      archiveDetailsUrl: 'https://archive.org/details/JesseLivermoreReminiscencesOfAStockOperator',
-      secondarySources: [
-        {
-          label: 'Wikimedia Commons PDF',
-          url: 'https://commons.wikimedia.org/wiki/File:Reminiscences_of_a_Stock_Operator.pdf',
-        },
-        {
-          label: 'Project Gutenberg eText',
-          url: 'https://www.gutenberg.org/ebooks/60979',
-        },
-      ],
-      summary:
-        'Chronicles tape reading, market psychology, position sizing, and emotional discipline through the early twentieth-century bucket shops and Wall Street exchanges.',
-      storedItem: findStored('reminiscences-stock-operator'),
-    },
-    {
-      bookKey: 'richest-man-in-babylon',
-      accessionCode: 'FOL.1926.02',
-      title: 'The Richest Man in Babylon',
-      subtitle: 'Timeless parables on thrift, compounding, and capital preservation',
-      author: 'George S. Clason',
-      year: 1926,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation:
-        'Early Babylonian parables and compiled 1926–1930 pamphlets are in the US public domain. Unencrypted Text PDFs are freely downloadable from the Internet Archive.',
-      coverPath: '/src/assets/images/cover_richest_babylon_1795617502112.jpg',
-      archiveIdentifier: 'richestmaninbaby0000geor_q8e2',
-      alternateArchiveIdentifiers: ['isbn_9798395421142'],
-      preferredPdfFilename: 'richestmaninbaby0000geor_q8e2.pdf',
-      openLibraryUrl: 'https://openlibrary.org/works/OL16180379W/The_Richest_Man_in_Babylon',
-      archiveDetailsUrl: 'https://archive.org/details/richestmaninbaby0000geor_q8e2',
-      secondarySources: [
-        {
-          label: 'Wikisource Edition',
-          url: 'https://en.wikisource.org/wiki/The_Richest_Man_In_Babylon_and_Other_Stories',
-        },
-        {
-          label: 'Alternate Archive Scan',
-          url: 'https://archive.org/details/isbn_9798395421142',
-        },
-      ],
-      summary:
-        'Presents seven foundational cures for a lean purse and the five laws of gold through parables set in ancient Babylon.',
-      storedItem: findStored('richest-man-in-babylon'),
-    },
-    {
       bookKey: 'one-up-on-wall-street',
       accessionCode: 'FOL.1989.03',
       title: 'One Up on Wall Street',
@@ -423,177 +568,6 @@ function buildRequestedBooksCatalog(vault: VaultBook[]): RequestedBookSpec[] {
       summary:
         'Explains how everyday investors can spot tenbaggers by categorizing companies into slow growers, stalwarts, fast growers, cyclicals, turnarounds, and asset plays.',
       storedItem: findStored('one-up-on-wall-street'),
-    },
-    {
-      bookKey: 'scientific-stock-speculation',
-      accessionCode: 'FOL.1920.04',
-      title: 'Scientific Stock Speculation',
-      subtitle: 'Foundational Dow essays on price trends and risk management',
-      author: 'Charles H. Dow',
-      year: 1920,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation: 'Public-domain compilation of Charles Dow’s foundational Wall Street essays.',
-      coverPath: '',
-      archiveIdentifier: 'scientificstocks00dowc',
-      preferredPdfFilename: 'scientificstocks00dowc.pdf',
-      openLibraryUrl: 'https://archive.org/details/scientificstocks00dowc',
-      archiveDetailsUrl: 'https://archive.org/details/scientificstocks00dowc',
-      secondarySources: [],
-      summary: "Charles Dow's foundational essays on market trends, price movements, and disciplined speculation.",
-      storedItem: findStored('scientific-stock-speculation'),
-    },
-    {
-      bookKey: 'stock-market-barometer',
-      accessionCode: 'FOL.1922.05',
-      title: 'The Stock Market Barometer',
-      subtitle: 'Dow Theory and forecasting market movements since 1897',
-      author: 'William Peter Hamilton',
-      year: 1922,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation: 'Public-domain 1922 classic explaining Dow Theory.',
-      coverPath: '',
-      archiveIdentifier: 'stockmarketbaro00hamigoog',
-      preferredPdfFilename: 'stockmarketbaro00hamigoog.pdf',
-      openLibraryUrl: 'https://archive.org/details/stockmarketbaro00hamigoog',
-      archiveDetailsUrl: 'https://archive.org/details/stockmarketbaro00hamigoog',
-      secondarySources: [],
-      summary: 'Classic exposition of Dow Theory and the forecasting power of stock market averages since 1897.',
-      storedItem: findStored('stock-market-barometer'),
-    },
-    {
-      bookKey: 'studies-in-tape-reading',
-      accessionCode: 'FOL.1910.06',
-      title: 'Studies in Tape Reading',
-      subtitle: 'Classic treatise on price action, volume, and order flow',
-      author: 'Richard D. Wyckoff',
-      year: 1910,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation: 'Public-domain 1910 edition by Richard D. Wyckoff.',
-      coverPath: '',
-      archiveIdentifier: 'studiesintapere01wyckgoog',
-      preferredPdfFilename: 'studiesintapere01wyckgoog_text.pdf',
-      openLibraryUrl: 'https://archive.org/details/studiesintapere01wyckgoog',
-      archiveDetailsUrl: 'https://archive.org/details/studiesintapere01wyckgoog',
-      secondarySources: [],
-      summary: 'Seminal work on reading stock ticker tape, volume, price action, and institutional order flow.',
-      storedItem: findStored('studies-in-tape-reading'),
-    },
-    {
-      bookKey: 'how-i-trade-and-invest',
-      accessionCode: 'FOL.1922.07',
-      title: 'How I Trade and Invest in Stocks and Bonds',
-      subtitle: 'Thirty-three years of Wall Street methods and risk discipline',
-      author: 'Richard D. Wyckoff',
-      year: 1922,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation: 'Public-domain 1922 volume by Richard D. Wyckoff.',
-      coverPath: '',
-      archiveIdentifier: 'cu31924031269552',
-      preferredPdfFilename: 'cu31924031269552.pdf',
-      openLibraryUrl: 'https://archive.org/details/cu31924031269552',
-      archiveDetailsUrl: 'https://archive.org/details/cu31924031269552',
-      secondarySources: [],
-      summary: 'Thirty-three years of Wall Street trading and investment principles, tape reading, and risk control.',
-      storedItem: findStored('how-i-trade-and-invest'),
-    },
-    {
-      bookKey: 'abc-of-stock-speculation',
-      accessionCode: 'FOL.1903.08',
-      title: 'The A B C of Stock Speculation',
-      subtitle: 'Early Wall Street Journal compilation that coined Dow Theory',
-      author: 'S. A. Nelson',
-      year: 1903,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation: 'Public-domain 1903 edition compiling Charles Dow editorials.',
-      coverPath: '',
-      archiveIdentifier: 'abcstockspecula00nelsgoog',
-      preferredPdfFilename: 'abcstockspecula00nelsgoog_text.pdf',
-      openLibraryUrl: 'https://archive.org/details/abcstockspecula00nelsgoog',
-      archiveDetailsUrl: 'https://archive.org/details/abcstockspecula00nelsgoog',
-      secondarySources: [],
-      summary: "Introduced the term Dow Theory, compiling Charles Dow's Wall Street Journal editorials on stock speculation.",
-      storedItem: findStored('abc-of-stock-speculation'),
-    },
-    {
-      bookKey: 'pitfalls-of-speculation',
-      accessionCode: 'FOL.1906.09',
-      title: 'The Pitfalls of Speculation',
-      subtitle: 'Behavioral and structural traps in equity speculation',
-      author: 'Thomas Gibson',
-      year: 1906,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation: 'Public-domain 1906 market psychology classic.',
-      coverPath: '',
-      archiveIdentifier: 'pitfallsspecula00gibsgoog',
-      preferredPdfFilename: 'pitfallsspecula00gibsgoog_text.pdf',
-      openLibraryUrl: 'https://archive.org/details/pitfallsspecula00gibsgoog',
-      archiveDetailsUrl: 'https://archive.org/details/pitfallsspecula00gibsgoog',
-      secondarySources: [],
-      summary: 'Analyzes common behavioral and structural mistakes made by equity and commodity speculators.',
-      storedItem: findStored('pitfalls-of-speculation'),
-    },
-    {
-      bookKey: 'elements-of-speculation',
-      accessionCode: 'FOL.1913.10',
-      title: 'The Elements of Speculation',
-      subtitle: 'Market cycles, earnings reports, and security valuation',
-      author: 'Thomas Gibson',
-      year: 1913,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation: 'Public-domain 1913 edition by Thomas Gibson.',
-      coverPath: '',
-      archiveIdentifier: 'cu31924013779438',
-      preferredPdfFilename: 'cu31924013779438.pdf',
-      openLibraryUrl: 'https://archive.org/details/cu31924013779438',
-      archiveDetailsUrl: 'https://archive.org/details/cu31924013779438',
-      secondarySources: [],
-      summary: 'Covers market cycles, manipulation, crop and earnings reports, and security valuation fundamentals.',
-      storedItem: findStored('elements-of-speculation'),
-    },
-    {
-      bookKey: 'business-barometers',
-      accessionCode: 'FOL.1911.11',
-      title: 'Business Barometers Used in the Accumulation of Money',
-      subtitle: 'Macroeconomic cycles and long-term capital allocation',
-      author: 'Roger Ward Babson',
-      year: 1911,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation: 'Public-domain 1911 treatise by Roger Ward Babson.',
-      coverPath: '',
-      archiveIdentifier: 'businessbaromet04babsgoog',
-      preferredPdfFilename: 'businessbaromet04babsgoog.pdf',
-      openLibraryUrl: 'https://archive.org/details/businessbaromet04babsgoog',
-      archiveDetailsUrl: 'https://archive.org/details/businessbaromet04babsgoog',
-      secondarySources: [],
-      summary: 'Foundational treatise on macroeconomic indicators, market cycles, and long-term capital accumulation.',
-      storedItem: findStored('business-barometers'),
-    },
-    {
-      bookKey: 'extraordinary-popular-delusions',
-      accessionCode: 'FOL.1841.12',
-      title: 'Memoirs of Extraordinary Popular Delusions',
-      subtitle: 'Historical study of speculative bubbles and crowd psychology',
-      author: 'Charles Mackay',
-      year: 1841,
-      rights: 'public_domain',
-      rightsLabel: 'Public Domain (US Pre-1931)',
-      rightsExplanation: 'Public-domain 1841 classic by Charles Mackay.',
-      coverPath: '',
-      archiveIdentifier: 'memoirsextraord12mackgoog',
-      preferredPdfFilename: 'memoirsextraord12mackgoog.pdf',
-      openLibraryUrl: 'https://archive.org/details/memoirsextraord12mackgoog',
-      archiveDetailsUrl: 'https://archive.org/details/memoirsextraord12mackgoog',
-      secondarySources: [],
-      summary: 'Classic chronicle of crowd psychology and financial manias including the South Sea Bubble and Tulipomania.',
-      storedItem: findStored('extraordinary-popular-delusions'),
     },
   ];
 }
@@ -1274,6 +1248,7 @@ async function storeInfoBookFromCatalog(bookKey: string): Promise<VaultBook> {
     ...current.filter((existing) => existing.bookKey !== def.bookKey),
   ]);
 
+  void ensureServerPdfCover(id, targetPath, VAULT_COVERS_DIR);
   return vaultEntry;
 }
 
@@ -1343,6 +1318,7 @@ async function storeSwingTradeEbookFromCatalog(
     ...current.filter((existing) => existing.bookKey !== def.bookKey),
   ]);
 
+  void ensureServerPdfCover(id, targetPath, VAULT_COVERS_DIR);
   return { item: vaultEntry };
 }
 
@@ -1438,6 +1414,7 @@ async function storeArchiveBookFromSpec(params: {
     ),
   ]);
 
+  void ensureServerPdfCover(id, targetPath, VAULT_COVERS_DIR);
   return { item: vaultEntry };
 }
 
@@ -1851,10 +1828,100 @@ async function startServer() {
           ...current.filter((existing) => !(bookKey && existing.bookKey === bookKey)),
         ]);
 
+        await ensureServerPdfCover(id, targetPath, VAULT_COVERS_DIR);
         res.status(201).json({ item: vaultEntry });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'PDF upload failed.';
         res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  app.get('/api/vault/:id/cover', async (req: Request, res: Response) => {
+    const id = String(req.params.id || '');
+    const uploadItem = readCatalog().find((entry) => entry.id === id);
+    const overrides = readOverrides();
+    const repoItem =
+      !uploadItem && !overrides[id]?.hidden
+        ? readRepoLibrary().find((entry) => entry.id === id)
+        : undefined;
+    const item = uploadItem || repoItem;
+    if (!item) {
+      res.status(404).json({ error: 'Book not found in vault.' });
+      return;
+    }
+
+    try {
+      const coverDir = uploadItem ? VAULT_COVERS_DIR : LIBRARY_COVERS_DIR;
+      const cachedCoverPath = resolveSafeCoverPath(coverDir, item.id);
+      if (fs.existsSync(cachedCoverPath) && fs.statSync(cachedCoverPath).size > 400) {
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+        res.sendFile(cachedCoverPath);
+        return;
+      }
+
+      if (!uploadItem) {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.status(404).json({ error: 'Cover preview unavailable.' });
+        return;
+      }
+
+      const pdfPath = resolveVaultFilePath(item.storedFilename);
+      const generated = await ensureServerPdfCover(item.id, pdfPath, coverDir);
+      if (!generated || !fs.existsSync(generated)) {
+        res.status(404).json({ error: 'Cover preview unavailable.' });
+        return;
+      }
+
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+      res.sendFile(generated);
+    } catch {
+      res.status(404).json({ error: 'Unable to serve cover.' });
+    }
+  });
+
+  app.post(
+    '/api/vault/:id/cover',
+    express.raw({ type: 'image/jpeg', limit: '350kb' }),
+    (req: Request, res: Response) => {
+      const id = String(req.params.id || '');
+      const uploadItem = readCatalog().find((entry) => entry.id === id);
+      const overrides = readOverrides();
+      const repoItem =
+        !uploadItem && !overrides[id]?.hidden
+          ? readRepoLibrary().find((entry) => entry.id === id)
+          : undefined;
+      const item = uploadItem || repoItem;
+      if (!item) {
+        res.status(404).json({ error: 'Book not found.' });
+        return;
+      }
+
+      const buffer = req.body;
+      if (
+        !Buffer.isBuffer(buffer) ||
+        buffer.byteLength < 400 ||
+        buffer.byteLength > 350 * 1024 ||
+        buffer[0] !== 0xff ||
+        buffer[1] !== 0xd8 ||
+        buffer[2] !== 0xff
+      ) {
+        res.status(400).json({ error: 'Invalid JPEG cover payload.' });
+        return;
+      }
+
+      try {
+        const coverDir = uploadItem ? VAULT_COVERS_DIR : LIBRARY_COVERS_DIR;
+        const outPath = resolveSafeCoverPath(coverDir, item.id);
+        if (!fs.existsSync(outPath)) {
+          fs.writeFileSync(outPath, buffer);
+          unavailableCovers.delete(outPath);
+        }
+        res.status(204).end();
+      } catch {
+        res.status(400).json({ error: 'Unable to save cover.' });
       }
     }
   );
@@ -1903,7 +1970,30 @@ async function startServer() {
     const body = (req.body || {}) as {
       notes?: string;
       readingStatus?: ReadingStatus;
+      lastPage?: number | null;
+      totalPages?: number | null;
+      bookmarkedPage?: number | null;
+      lastReadAt?: string | null;
     };
+
+    const sanitizePageNumber = (val: unknown): number | null | undefined => {
+      if (val === undefined) return undefined;
+      if (val === null) return null;
+      if (typeof val === 'number' && Number.isFinite(val) && val >= 1 && val <= 100000) {
+        return Math.floor(val);
+      }
+      return undefined;
+    };
+
+    const nextLastPage = sanitizePageNumber(body.lastPage);
+    const nextTotalPages = sanitizePageNumber(body.totalPages);
+    const nextBookmarkedPage = sanitizePageNumber(body.bookmarkedPage);
+    const nextLastReadAt =
+      body.lastReadAt === null
+        ? null
+        : typeof body.lastReadAt === 'string' && body.lastReadAt.length <= 64
+          ? body.lastReadAt
+          : undefined;
 
     let updatedItem: VaultBook | null = null;
     await mutateCatalog((current) => {
@@ -1920,6 +2010,10 @@ async function startServer() {
       ) {
         updated.readingStatus = body.readingStatus;
       }
+      if (nextLastPage !== undefined) updated.lastPage = nextLastPage;
+      if (nextTotalPages !== undefined) updated.totalPages = nextTotalPages;
+      if (nextBookmarkedPage !== undefined) updated.bookmarkedPage = nextBookmarkedPage;
+      if (nextLastReadAt !== undefined) updated.lastReadAt = nextLastReadAt;
       updatedItem = updated;
       const next = [...current];
       next[index] = updated;
@@ -1943,6 +2037,10 @@ async function startServer() {
           ) {
             nextEntry.readingStatus = body.readingStatus;
           }
+          if (nextLastPage !== undefined) nextEntry.lastPage = nextLastPage;
+          if (nextTotalPages !== undefined) nextEntry.totalPages = nextTotalPages;
+          if (nextBookmarkedPage !== undefined) nextEntry.bookmarkedPage = nextBookmarkedPage;
+          if (nextLastReadAt !== undefined) nextEntry.lastReadAt = nextLastReadAt;
           merged = applyOverride(repoBook, nextEntry);
           return { ...current, [id]: nextEntry };
         });
@@ -1968,6 +2066,14 @@ async function startServer() {
         const filePath = resolveVaultFilePath(item.storedFilename);
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
+        }
+        try {
+          const coverFile = resolveSafeCoverPath(VAULT_COVERS_DIR, item.id);
+          if (fs.existsSync(coverFile)) {
+            fs.unlinkSync(coverFile);
+          }
+        } catch {
+          // ignore
         }
         return current.filter((entry) => entry.id !== id);
       });
@@ -2009,7 +2115,7 @@ async function startServer() {
   } else {
     const distDir = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distDir));
-    app.get('/{*splat}', (_req: Request, res: Response) => {
+    app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.resolve(distDir, 'index.html'));
     });
   }

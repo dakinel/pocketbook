@@ -35,8 +35,10 @@ export function PdfReaderModal({
   const [closing, setClosing] = useState(false);
   const [backdropVisible, setBackdropVisible] = useState(false);
 
+  const bookId = book?.id ?? null;
+
   useEffect(() => {
-    if (book) {
+    if (bookId && book) {
       setNotes(book.notes || '');
       setReadingStatus(book.readingStatus || 'unread');
       setShowNotes(false);
@@ -51,7 +53,13 @@ export function PdfReaderModal({
       });
       return () => window.cancelAnimationFrame(raf);
     }
-  }, [book]);
+  }, [bookId]);
+
+  useEffect(() => {
+    if (book) {
+      setReadingStatus(book.readingStatus || 'unread');
+    }
+  }, [book?.readingStatus]);
 
   function requestClose() {
     if (closing) return;
@@ -121,7 +129,7 @@ export function PdfReaderModal({
   return (
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 transition-all duration-500 ${
-        backdropVisible ? 'bg-black/84 backdrop-blur-lg opacity-100' : 'bg-black/0 opacity-0'
+        backdropVisible ? 'bg-[#091214]/90 opacity-100' : 'bg-[#091214]/0 opacity-0'
       }`}
       role="dialog"
       aria-modal="true"
@@ -139,17 +147,17 @@ export function PdfReaderModal({
         }`}
         style={{
           background:
-            'radial-gradient(ellipse 60% 56% at 50% 48%, rgba(243, 198, 119, 0.11), transparent 70%)',
+            'radial-gradient(ellipse 60% 56% at 50% 48%, rgba(143, 224, 207, 0.12), transparent 70%)',
         }}
       />
       <div className="fixed top-4 right-4 sm:top-5 sm:right-6 z-30 flex items-center gap-2">
         <button
           type="button"
           onClick={() => setShowNotes((prev) => !prev)}
-          className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-md border backdrop-blur-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+          className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
             showNotes
-              ? 'bg-[#f3c677] text-[#1A1816] border-[#f3c677]'
-              : 'bg-black/45 text-white border-white/15 hover:bg-black/70'
+              ? 'bg-[#e4eeef] text-[#112224] border-[#e4eeef]'
+              : 'bg-[#0c181a]/85 text-white border-white/15 hover:bg-[#0c181a]'
           }`}
         >
           <NotebookPen className="w-3.5 h-3.5" />
@@ -160,7 +168,7 @@ export function PdfReaderModal({
           type="button"
           onClick={requestClose}
           aria-label="Close book"
-          className="p-2 text-white/75 hover:text-white rounded-md bg-black/45 border border-white/15 hover:bg-black/70 backdrop-blur-md transition-colors cursor-pointer"
+          className="p-2 text-white/80 hover:text-white rounded-md bg-[#0c181a]/85 border border-white/15 hover:bg-[#0c181a] transition-colors cursor-pointer"
         >
           <X className="w-4 h-4" />
         </button>
@@ -175,7 +183,12 @@ export function PdfReaderModal({
         }}
       >
         <div className="pointer-events-auto w-full flex flex-col items-center justify-center">
-          <FlipBookReader book={book} originRect={originRect} closing={closing} />
+          <FlipBookReader
+            book={book}
+            originRect={originRect}
+            closing={closing}
+            onBookUpdate={onUpdate}
+          />
         </div>
       </div>
 

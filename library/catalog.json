@@ -187,23 +187,6 @@
     "storedAt": "2026-11-25T17:37:06.897Z"
   },
   {
-    "id": "business-barometers",
-    "bookKey": "business-barometers",
-    "title": "Business Barometers Used in the Accumulation of Money",
-    "author": "Roger Ward Babson",
-    "year": 1911,
-    "sourceType": "archive",
-    "sourceIdentifier": "businessbaromet04babsgoog",
-    "sourceUrl": "https://archive.org/details/businessbaromet04babsgoog",
-    "originalFilename": "businessbaromet04babsgoog.pdf",
-    "storedFilename": "business-barometers.pdf",
-    "sizeBytes": 5579834,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "Foundational treatise on macroeconomic indicators, market cycles, and long-term capital accumulation.",
-    "storedAt": "2026-11-25T17:37:00.474Z"
-  },
-  {
     "id": "ib-business-finance-murray",
     "bookKey": "ib-business-finance-murray",
     "title": "Business Finance",
@@ -389,23 +372,6 @@
     "readingStatus": "unread",
     "notes": "Choosing securities, evaluating performance, and managing portfolio risk.",
     "storedAt": "2026-11-25T17:37:01.599Z"
-  },
-  {
-    "id": "how-i-trade-and-invest",
-    "bookKey": "how-i-trade-and-invest",
-    "title": "How I Trade and Invest in Stocks and Bonds",
-    "author": "Richard D. Wyckoff",
-    "year": 1922,
-    "sourceType": "archive",
-    "sourceIdentifier": "cu31924031269552",
-    "sourceUrl": "https://archive.org/details/cu31924031269552",
-    "originalFilename": "cu31924031269552.pdf",
-    "storedFilename": "how-i-trade-and-invest.pdf",
-    "sizeBytes": 6238245,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "Thirty-three years of Wall Street trading and investment principles, tape reading, and risk control.",
-    "storedAt": "2026-11-25T17:37:17.775Z"
   },
   {
     "id": "ib-become-successful-investor",
@@ -714,23 +680,6 @@
     "storedAt": "2026-11-25T16:04:14.978Z"
   },
   {
-    "id": "extraordinary-popular-delusions",
-    "bookKey": "extraordinary-popular-delusions",
-    "title": "Memoirs of Extraordinary Popular Delusions",
-    "author": "Charles Mackay",
-    "year": 1841,
-    "sourceType": "archive",
-    "sourceIdentifier": "memoirsextraord12mackgoog",
-    "sourceUrl": "https://archive.org/details/memoirsextraord12mackgoog",
-    "originalFilename": "memoirsextraord12mackgoog.pdf",
-    "storedFilename": "extraordinary-popular-delusions.pdf",
-    "sizeBytes": 8421866,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "Classic chronicle of crowd psychology and financial manias including the South Sea Bubble and Tulipomania.",
-    "storedAt": "2026-11-25T17:37:21.509Z"
-  },
-  {
     "id": "sts-pattern-cycles",
     "bookKey": "sts-pattern-cycles",
     "title": "Pattern Cycles",
@@ -782,23 +731,6 @@
     "storedAt": "2026-11-25T17:37:09.527Z"
   },
   {
-    "id": "reminiscences-stock-operator",
-    "bookKey": "reminiscences-stock-operator",
-    "title": "Reminiscences of a Stock Operator",
-    "author": "Edwin Lefèvre",
-    "year": 1923,
-    "sourceType": "archive",
-    "sourceIdentifier": "JesseLivermoreReminiscencesOfAStockOperator",
-    "sourceUrl": "https://archive.org/details/JesseLivermoreReminiscencesOfAStockOperator",
-    "originalFilename": "Jesse Livermore Reminiscences Of A Stock Operator.pdf",
-    "storedFilename": "reminiscences-stock-operator.pdf",
-    "sizeBytes": 2248116,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "",
-    "storedAt": "2026-11-25T14:41:35.648Z"
-  },
-  {
     "id": "ib-saving-investing-sec",
     "bookKey": "ib-saving-investing-sec",
     "title": "Saving and Investing Roadmap",
@@ -814,23 +746,6 @@
     "readingStatus": "unread",
     "notes": "Official SEC guide to stocks, bonds, mutual funds, asset allocation, and investor protection.",
     "storedAt": "2026-11-25T17:37:02.935Z"
-  },
-  {
-    "id": "scientific-stock-speculation",
-    "bookKey": "scientific-stock-speculation",
-    "title": "Scientific Stock Speculation",
-    "author": "Charles H. Dow",
-    "year": 1920,
-    "sourceType": "archive",
-    "sourceIdentifier": "scientificstocks00dowc",
-    "sourceUrl": "https://archive.org/details/scientificstocks00dowc",
-    "originalFilename": "scientificstocks00dowc.pdf",
-    "storedFilename": "scientific-stock-speculation.pdf",
-    "sizeBytes": 5551442,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "Charles Dow's foundational essays on market trends, price movements, and disciplined speculation.",
-    "storedAt": "2026-11-25T17:36:58.537Z"
   },
   {
     "id": "sts-millionaire-traders",
@@ -918,23 +833,6 @@
     "storedAt": "2026-11-25T14:46:59.410Z"
   },
   {
-    "id": "abc-of-stock-speculation",
-    "bookKey": "abc-of-stock-speculation",
-    "title": "The A B C of Stock Speculation",
-    "author": "S. A. Nelson",
-    "year": 1903,
-    "sourceType": "archive",
-    "sourceIdentifier": "abcstockspecula00nelsgoog",
-    "sourceUrl": "https://archive.org/details/abcstockspecula00nelsgoog",
-    "originalFilename": "abcstockspecula00nelsgoog_text.pdf",
-    "storedFilename": "abc-of-stock-speculation.pdf",
-    "sizeBytes": 10219759,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "Introduced the term Dow Theory, compiling Charles Dow's Wall Street Journal editorials on stock speculation.",
-    "storedAt": "2026-11-25T17:37:04.116Z"
-  },
-  {
     "id": "ib-basics-investing-stocks",
     "bookKey": "ib-basics-investing-stocks",
     "title": "The Basics for Investing in Stocks",
@@ -986,23 +884,6 @@
     "storedAt": "2026-11-25T16:04:16.148Z"
   },
   {
-    "id": "elements-of-speculation",
-    "bookKey": "elements-of-speculation",
-    "title": "The Elements of Speculation",
-    "author": "Thomas Gibson",
-    "year": 1913,
-    "sourceType": "archive",
-    "sourceIdentifier": "cu31924013779438",
-    "sourceUrl": "https://archive.org/details/cu31924013779438",
-    "originalFilename": "cu31924013779438.pdf",
-    "storedFilename": "elements-of-speculation.pdf",
-    "sizeBytes": 2822712,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "Covers market cycles, manipulation, crop and earnings reports, and security valuation fundamentals.",
-    "storedAt": "2026-11-25T17:37:01.016Z"
-  },
-  {
     "id": "ib-first-trading-manual",
     "bookKey": "ib-first-trading-manual",
     "title": "The First Trading Manual: Foundation Course and Strategies",
@@ -1037,23 +918,6 @@
     "storedAt": "2026-11-25T17:37:01.167Z"
   },
   {
-    "id": "pitfalls-of-speculation",
-    "bookKey": "pitfalls-of-speculation",
-    "title": "The Pitfalls of Speculation",
-    "author": "Thomas Gibson",
-    "year": 1906,
-    "sourceType": "archive",
-    "sourceIdentifier": "pitfallsspecula00gibsgoog",
-    "sourceUrl": "https://archive.org/details/pitfallsspecula00gibsgoog",
-    "originalFilename": "pitfallsspecula00gibsgoog_text.pdf",
-    "storedFilename": "pitfalls-of-speculation.pdf",
-    "sizeBytes": 5147818,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "Analyzes common behavioral and structural mistakes made by equity and commodity speculators.",
-    "storedAt": "2026-11-25T17:37:12.834Z"
-  },
-  {
     "id": "ib-power-of-divergence",
     "bookKey": "ib-power-of-divergence",
     "title": "The Power of Divergence Trading",
@@ -1069,40 +933,6 @@
     "readingStatus": "unread",
     "notes": "Focused guide on regular and hidden divergence strategies using RSI and MACD indicators.",
     "storedAt": "2026-11-25T16:04:17.844Z"
-  },
-  {
-    "id": "richest-man-in-babylon",
-    "bookKey": "richest-man-in-babylon",
-    "title": "The Richest Man in Babylon",
-    "author": "George S. Clason",
-    "year": 1926,
-    "sourceType": "archive",
-    "sourceIdentifier": "richestmaninbaby0000geor_q8e2",
-    "sourceUrl": "https://archive.org/details/richestmaninbaby0000geor_q8e2",
-    "originalFilename": "richestmaninbaby0000geor_q8e2.pdf",
-    "storedFilename": "richest-man-in-babylon.pdf",
-    "sizeBytes": 6845483,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "",
-    "storedAt": "2026-11-25T14:41:38.340Z"
-  },
-  {
-    "id": "stock-market-barometer",
-    "bookKey": "stock-market-barometer",
-    "title": "The Stock Market Barometer",
-    "author": "William Peter Hamilton",
-    "year": 1922,
-    "sourceType": "archive",
-    "sourceIdentifier": "stockmarketbaro00hamigoog",
-    "sourceUrl": "https://archive.org/details/stockmarketbaro00hamigoog",
-    "originalFilename": "stockmarketbaro00hamigoog.pdf",
-    "storedFilename": "stock-market-barometer.pdf",
-    "sizeBytes": 5344262,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "Classic exposition of Dow Theory and the forecasting power of stock market averages since 1897.",
-    "storedAt": "2026-11-25T17:36:58.714Z"
   },
   {
     "id": "sts-trader-plan",

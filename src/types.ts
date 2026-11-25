@@ -14,7 +14,7 @@ export interface RequestedBookSpec {
   rightsExplanation: string;
   coverPath: string;
   archiveIdentifier: string;
-  alternateArchiveIdentifiers: string[];
+  alternateArchiveIdentifiers?: string[];
   preferredPdfFilename?: string;
   openLibraryUrl: string;
   archiveDetailsUrl: string;
@@ -84,4 +84,8 @@ export interface VaultBook {
   readingStatus: ReadingStatus;
   notes: string;
   storedAt: string;
+  lastPage?: number | null;
+  totalPages?: number | null;
+  bookmarkedPage?: number | null;
+  lastReadAt?: string | null;
 }
