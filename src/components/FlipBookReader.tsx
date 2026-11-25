@@ -110,6 +110,7 @@ export function FlipBookReader({
   const clickTimerRef = useRef<number | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const hasInteractedRef = useRef(false);
+  const pendingCommittedPageRef = useRef<number | null>(null);
   const bookRef = useRef(book);
   const onBookUpdateRef = useRef(onBookUpdate);
   const lastPageTapRef = useRef<{ time: number; x: number; y: number; pageNum: number } | null>(null);
@@ -250,6 +251,7 @@ export function FlipBookReader({
     let cancelled = false;
     const initialProgress = resolveBookProgress(bookRef.current);
     hasInteractedRef.current = false;
+    pendingCommittedPageRef.current = null;
     setProgress(initialProgress);
     setLoadingDoc(true);
     setDocError(null);
@@ -423,6 +425,48 @@ export function FlipBookReader({
     }
   }, []);
 
+  const commitPageProgress = useCallback(
+    (
+      targetPage: number,
+      options?: {
+        bookmarkedPage?: number | null;
+        status?: ReadingStatus;
+        immediate?: boolean;
+        forceLastPage?: boolean;
+      }
+    ) => {
+      if (numPages <= 0) return;
+      const clampedPage = Math.max(1, Math.min(numPages, targetPage));
+      const now = new Date().toISOString();
+      setProgress((prev) => {
+        const nextLastPage = options?.forceLastPage
+          ? clampedPage
+          : Math.max(prev.lastPage, clampedPage);
+        const nextBookmark =
+          options && 'bookmarkedPage' in options
+            ? (options.bookmarkedPage ?? null)
+            : prev.bookmarkedPage;
+        const nextStatus: ReadingStatus =
+          options?.status ??
+          (prev.readingStatus === 'completed'
+            ? 'completed'
+            : nextLastPage >= 2 || nextBookmark !== null
+              ? 'reading'
+              : 'unread');
+        const nextState: BookProgressState = {
+          lastPage: nextLastPage,
+          totalPages: numPages,
+          bookmarkedPage: nextBookmark,
+          readingStatus: nextStatus,
+          updatedAt: now,
+        };
+        persistProgressToServer(book.id, nextState, options?.immediate);
+        return nextState;
+      });
+    },
+    [book.id, numPages, persistProgressToServer]
+  );
+
   const openPageFocus = useCallback(
     (pageNum: number, clientX: number, clientY: number, containerEl: HTMLElement) => {
       if (pageNum < 1 || pageNum > numPages) return;
@@ -433,9 +477,11 @@ export function FlipBookReader({
       const { rx, ry } = computeImageNormalizedPoint(containerEl, clientX, clientY);
       void renderPdfPage(pageNum);
       void renderHiResPage(pageNum);
+      hasInteractedRef.current = true;
+      commitPageProgress(pageNum);
       setFocusAnchor({ pageNum, rx, ry });
     },
-    [numPages, renderHiResPage, renderPdfPage]
+    [commitPageProgress, numPages, renderHiResPage, renderPdfPage]
   );
 
   const handlePageTapPointerUp = useCallback(
@@ -475,39 +521,6 @@ export function FlipBookReader({
         : Math.min(numPages, currentSpread * 2)
       : 1;
 
-  const commitPageProgress = useCallback(
-    (
-      targetPage: number,
-      options?: { bookmarkedPage?: number | null; status?: ReadingStatus; immediate?: boolean }
-    ) => {
-      if (numPages <= 0) return;
-      const clampedPage = Math.max(1, Math.min(numPages, targetPage));
-      const now = new Date().toISOString();
-      setProgress((prev) => {
-        const nextStatus: ReadingStatus =
-          options?.status ??
-          (prev.readingStatus === 'completed'
-            ? 'completed'
-            : clampedPage >= 2 || (options?.bookmarkedPage ?? prev.bookmarkedPage) !== null
-              ? 'reading'
-              : 'unread');
-        const nextState: BookProgressState = {
-          lastPage: clampedPage,
-          totalPages: numPages,
-          bookmarkedPage:
-            options && 'bookmarkedPage' in options
-              ? (options.bookmarkedPage ?? null)
-              : prev.bookmarkedPage,
-          readingStatus: nextStatus,
-          updatedAt: now,
-        };
-        persistProgressToServer(book.id, nextState, options?.immediate);
-        return nextState;
-      });
-    },
-    [book.id, numPages, persistProgressToServer]
-  );
-
   const toggleBookKeeperAtPage = useCallback(
     (pageNum: number) => {
       if (numPages <= 0) return;
@@ -527,12 +540,14 @@ export function FlipBookReader({
           bookmarkedPage: null,
           status: 'unread',
           immediate: true,
+          forceLastPage: true,
         });
       } else {
         commitPageProgress(clampedPage, {
           bookmarkedPage: clampedPage,
           status: progress.readingStatus === 'completed' ? 'completed' : 'reading',
           immediate: true,
+          forceLastPage: true,
         });
       }
     },
@@ -540,10 +555,17 @@ export function FlipBookReader({
   );
 
   useEffect(() => {
-    const leftPage = currentSpread === 0 ? 1 : Math.min(Math.max(1, numPages), currentSpread * 2);
-    setJumpValue(String(leftPage));
+    const pendingPage = pendingCommittedPageRef.current;
+    pendingCommittedPageRef.current = null;
+    const activePage =
+      pendingPage !== null
+        ? Math.max(1, Math.min(Math.max(1, numPages), pendingPage))
+        : currentSpread === 0
+          ? 1
+          : Math.min(Math.max(1, numPages), currentSpread * 2);
+    setJumpValue(String(activePage));
     if (numPages > 0 && hasInteractedRef.current) {
-      commitPageProgress(leftPage);
+      commitPageProgress(activePage);
     }
   }, [currentSpread, numPages, commitPageProgress]);
 
@@ -592,6 +614,7 @@ export function FlipBookReader({
     hasInteractedRef.current = true;
     const clamped = Math.max(1, Math.min(numPages, targetPage));
     const targetSpread = Math.floor(clamped / 2);
+    pendingCommittedPageRef.current = clamped;
     setActiveFlipLeaf(null);
     setCurrentSpread(targetSpread);
     commitPageProgress(clamped, { immediate: true });
@@ -610,6 +633,17 @@ export function FlipBookReader({
   const keptOnLeft = keptPage !== null && zoomedLeftPage === keptPage;
   const keptOnRight = keptPage !== null && zoomedRightPage === keptPage;
   const keptOnCurrentSpread = keptOnLeft || keptOnRight;
+  const displayKeptPage =
+    keptOnCurrentSpread && keptPage !== null
+      ? keptPage
+      : progress.bookmarkedPage === null &&
+          progress.lastPage <= 1 &&
+          currentSpread === 0 &&
+          numPages > 0
+        ? 1
+        : null;
+  const displayKeptOnLeft = displayKeptPage !== null && zoomedLeftPage === displayKeptPage;
+  const displayKeptOnRight = displayKeptPage !== null && zoomedRightPage === displayKeptPage;
 
   const renderPageContent = (pageNum: number, emptyLabel: string) => {
     if (pageNum > numPages) {
@@ -666,7 +700,7 @@ export function FlipBookReader({
           <div className="flex-1 overflow-y-auto bg-[#e9e5dc] rounded p-4 space-y-4">
             {zoomedLeftPage ? (
               <div
-                className="bg-white shadow mx-auto max-w-2xl cursor-zoom-in"
+                className="relative bg-white shadow mx-auto max-w-2xl cursor-zoom-in"
                 title="Double-click to focus & read"
                 onDoubleClick={(e) => {
                   e.stopPropagation();
@@ -674,6 +708,23 @@ export function FlipBookReader({
                 }}
                 onPointerUp={(e) => handlePageTapPointerUp(zoomedLeftPage, e)}
               >
+                {displayKeptOnLeft && displayKeptPage !== null ? (
+                  <button
+                    key={`zoom-keeper-${displayKeptPage}`}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleBookKeeperAtPage(displayKeptPage);
+                    }}
+                    title={`Book Keeper at Page ${displayKeptPage} — click to toggle`}
+                    aria-label={`Bookmark at Page ${displayKeptPage}`}
+                    className="reader-book-keeper-ribbon absolute top-0 left-5 z-20 flex flex-col items-center justify-end cursor-pointer"
+                  >
+                    <span className="text-[9px] font-mono font-bold tabular-nums text-[#fff5f5] leading-none">
+                      p.{displayKeptPage}
+                    </span>
+                  </button>
+                ) : null}
                 {pageImages[zoomedLeftPage] ? (
                   <img
                     src={pageImages[zoomedLeftPage]}
@@ -690,7 +741,7 @@ export function FlipBookReader({
             ) : null}
             {zoomedRightPage ? (
               <div
-                className="bg-white shadow mx-auto max-w-2xl cursor-zoom-in"
+                className="relative bg-white shadow mx-auto max-w-2xl cursor-zoom-in"
                 title="Double-click to focus & read"
                 onDoubleClick={(e) => {
                   e.stopPropagation();
@@ -698,6 +749,23 @@ export function FlipBookReader({
                 }}
                 onPointerUp={(e) => handlePageTapPointerUp(zoomedRightPage, e)}
               >
+                {displayKeptOnRight && displayKeptPage !== null ? (
+                  <button
+                    key={`zoom-keeper-${displayKeptPage}`}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleBookKeeperAtPage(displayKeptPage);
+                    }}
+                    title={`Book Keeper at Page ${displayKeptPage} — click to toggle`}
+                    aria-label={`Bookmark at Page ${displayKeptPage}`}
+                    className="reader-book-keeper-ribbon absolute top-0 right-5 z-20 flex flex-col items-center justify-end cursor-pointer"
+                  >
+                    <span className="text-[9px] font-mono font-bold tabular-nums text-[#fff5f5] leading-none">
+                      p.{displayKeptPage}
+                    </span>
+                  </button>
+                ) : null}
                 {pageImages[zoomedRightPage] ? (
                   <img
                     src={pageImages[zoomedRightPage]}
@@ -720,21 +788,6 @@ export function FlipBookReader({
             <div className="bookBoardLeft" aria-hidden="true" />
             <div className="bookBoardRight" aria-hidden="true" />
             <div className="pageBg">
-              {coverOpened && keptOnCurrentSpread && keptPage !== null ? (
-                <button
-                  type="button"
-                  onClick={() => toggleBookKeeperAtPage(keptPage)}
-                  title={`Book Keeper at Page ${keptPage} — click to remove`}
-                  aria-label={`Remove red bookmark at Page ${keptPage}`}
-                  className={`reader-book-keeper-ribbon absolute -top-2 z-[110] flex flex-col items-center justify-end cursor-pointer ${
-                    keptOnLeft ? 'left-[10%]' : 'right-[10%]'
-                  }`}
-                >
-                  <span className="text-[9px] font-mono font-bold tabular-nums text-[#fff5f5] leading-none">
-                    p.{keptPage}
-                  </span>
-                </button>
-              ) : null}
               <div className="baseLeft">
                 <div className="w-full h-full flex flex-col items-center justify-center p-6 sm:p-10 text-center">
                   <p className="text-[11px] font-mono uppercase tracking-widest text-[#78716C]">
@@ -868,6 +921,27 @@ export function FlipBookReader({
                   </div>
                 ) : null}
               </div>
+
+              {coverOpened && displayKeptPage !== null && (displayKeptOnLeft || displayKeptOnRight) ? (
+                <button
+                  key={`spread-keeper-${displayKeptPage}-${displayKeptOnLeft ? 'L' : 'R'}`}
+                  type="button"
+                  onClick={() => toggleBookKeeperAtPage(displayKeptPage)}
+                  title={
+                    keptPage === displayKeptPage
+                      ? `Book Keeper at Page ${displayKeptPage} — click to remove`
+                      : `Place Book Keeper at Page ${displayKeptPage}`
+                  }
+                  aria-label={`Toggle red bookmark at Page ${displayKeptPage}`}
+                  className={`reader-book-keeper-ribbon absolute -top-2 z-[120] flex flex-col items-center justify-end cursor-pointer ${
+                    displayKeptOnLeft ? 'left-[10%]' : 'right-[10%]'
+                  }`}
+                >
+                  <span className="text-[9px] font-mono font-bold tabular-nums text-[#fff5f5] leading-none">
+                    p.{displayKeptPage}
+                  </span>
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -991,7 +1065,7 @@ export function FlipBookReader({
           pageImages={pageImages}
           hiResImages={hiResImages}
           pageErrors={pageErrors}
-          keptPage={keptPage}
+          keptPage={displayKeptPage ?? keptPage}
           onToggleBookmark={(pageNum) => toggleBookKeeperAtPage(pageNum)}
           onRequestHiRes={(pageNum) => {
             void renderPdfPage(pageNum);
@@ -1000,8 +1074,14 @@ export function FlipBookReader({
           onChangePage={(nextPage) => {
             hasInteractedRef.current = true;
             const clamped = Math.max(1, Math.min(numPages, nextPage));
+            const targetSpread = Math.floor(clamped / 2);
+            pendingCommittedPageRef.current = clamped;
             setActiveFlipLeaf(null);
-            setCurrentSpread(Math.floor(clamped / 2));
+            setCurrentSpread(targetSpread);
+            if (targetSpread === currentSpread) {
+              pendingCommittedPageRef.current = null;
+              commitPageProgress(clamped);
+            }
             void renderPdfPage(clamped);
             void renderHiResPage(clamped);
             setFocusAnchor({ pageNum: clamped, rx: 0.5, ry: 0.24 });

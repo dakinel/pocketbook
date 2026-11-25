@@ -372,6 +372,24 @@ export function FocusedPageOverlay({
               isDragging ? 'cursor-grabbing' : zoom > 1.05 ? 'cursor-grab' : 'cursor-zoom-in'
             }`}
           >
+            {keptPage === anchor.pageNum ? (
+              <button
+                key={`focus-keeper-${anchor.pageNum}`}
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleBookmark?.(anchor.pageNum);
+                }}
+                title={`Book Keeper at Page ${anchor.pageNum}${onToggleBookmark ? ' — click to toggle' : ''}`}
+                aria-label={`Book Keeper at Page ${anchor.pageNum}`}
+                className="reader-book-keeper-ribbon absolute top-0 right-5 z-20 flex flex-col items-center justify-end cursor-pointer"
+              >
+                <span className="text-[9px] font-mono font-bold tabular-nums text-[#fff5f5] leading-none">
+                  p.{anchor.pageNum}
+                </span>
+              </button>
+            ) : null}
             <img
               ref={imgRef}
               src={activeSrc}

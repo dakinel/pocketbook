@@ -507,6 +507,15 @@
   }
 }
 
+@keyframes vaultShacklePop {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  100% {
+    transform: translate3d(-1px, -11px, 0) rotate(-14deg);
+  }
+}
+
 .vault-plate-breaking {
   animation: vaultPlateDissolve 0.62s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
@@ -515,12 +524,26 @@
   animation: vaultShockwave 0.56s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+.vault-locker-group {
+  transform-box: fill-box;
+  transform-origin: center center;
+}
+
+.vault-shackle-group {
+  transform-box: view-box;
+  transform-origin: 83px 125px;
+}
+
 .vault-locker-breaking {
   animation: vaultLockerBreak 0.72s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
+.vault-locker-breaking .vault-shackle-group {
+  animation: vaultShacklePop 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
 .vault-chain-arm {
-  transform-box: fill-box;
+  transform-box: view-box;
 }
 
 .vault-chain-tl {
@@ -563,6 +586,7 @@
   .vault-plate-breaking,
   .vault-shockwave-burst,
   .vault-locker-breaking,
+  .vault-locker-breaking .vault-shackle-group,
   .vault-chain-breaking .vault-chain-arm,
   .flip-page,
   .cover-reveal-leaf,
@@ -572,7 +596,8 @@
   .bookBoardLeft,
   .baseLeft,
   .pageFoldRight,
-  .pageFoldLeft {
+  .pageFoldLeft,
+  .reader-book-keeper-ribbon {
     transition: none !important;
     animation: none !important;
   }
@@ -860,6 +885,21 @@
   height: 48px;
 }
 
+@keyframes readerKeeperReveal {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -26px, 24px) scaleY(0.42);
+  }
+  65% {
+    opacity: 1;
+    transform: translate3d(0, 3px, 24px) scaleY(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 24px) scaleY(1);
+  }
+}
+
 .reader-book-keeper-ribbon {
   width: 28px;
   min-height: 54px;
@@ -875,10 +915,13 @@
   box-shadow:
     0 10px 18px rgba(0, 0, 0, 0.34),
     inset 0 1px 0 rgba(255, 224, 224, 0.35);
+  transform-origin: top center;
+  transform: translate3d(0, 0, 24px);
+  animation: readerKeeperReveal 0.44s cubic-bezier(0.22, 1, 0.36, 1) both;
   transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .reader-book-keeper-ribbon:hover {
-  transform: translateY(3px);
+  transform: translate3d(0, 3px, 24px);
 }
 
