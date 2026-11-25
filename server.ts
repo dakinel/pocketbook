@@ -20,6 +20,11 @@ const MAX_PDF_BYTES = 50 * 1024 * 1024;
 const DATA_DIR = path.resolve(process.cwd(), 'data', 'vault');
 const VAULT_FILES_DIR = path.resolve(DATA_DIR, 'files');
 const CATALOG_PATH = path.resolve(DATA_DIR, 'catalog.json');
+const OVERRIDES_PATH = path.resolve(DATA_DIR, 'overrides.json');
+
+const LIBRARY_DIR = path.resolve(process.cwd(), 'library');
+const LIBRARY_BOOKS_DIR = path.resolve(LIBRARY_DIR, 'books');
+const LIBRARY_CATALOG_PATH = path.resolve(LIBRARY_DIR, 'catalog.json');
 
 fs.mkdirSync(VAULT_FILES_DIR, { recursive: true });
 
@@ -82,15 +87,23 @@ function validateIdentifier(id: string): string {
   return trimmed;
 }
 
-function resolveVaultFilePath(storedFilename: string): string {
+function resolvePdfPathInDir(baseDir: string, storedFilename: string): string {
   if (!/^[a-zA-Z0-9_-]+\.pdf$/.test(storedFilename)) {
     throw new Error('Invalid stored filename.');
   }
-  const resolved = path.resolve(VAULT_FILES_DIR, storedFilename);
-  if (!resolved.startsWith(VAULT_FILES_DIR + path.sep)) {
-    throw new Error('Resolved path escapes vault storage boundary.');
+  const resolved = path.resolve(baseDir, storedFilename);
+  if (!resolved.startsWith(baseDir + path.sep)) {
+    throw new Error('Resolved path escapes storage boundary.');
   }
   return resolved;
+}
+
+function resolveVaultFilePath(storedFilename: string): string {
+  return resolvePdfPathInDir(VAULT_FILES_DIR, storedFilename);
+}
+
+function resolveLibraryFilePath(storedFilename: string): string {
+  return resolvePdfPathInDir(LIBRARY_BOOKS_DIR, storedFilename);
 }
 
 function sanitizeDownloadFilename(name: string): string {
@@ -102,12 +115,18 @@ function sanitizeDownloadFilename(name: string): string {
   return `${base || 'document'}.pdf`;
 }
 
-function readCatalog(): VaultBook[] {
-  if (!fs.existsSync(CATALOG_PATH)) {
+interface BookOverride {
+  notes?: string;
+  readingStatus?: ReadingStatus;
+  hidden?: boolean;
+}
+
+function readBookListFromFile(catalogFilePath: string, filesDir: string): VaultBook[] {
+  if (!fs.existsSync(catalogFilePath)) {
     return [];
   }
   try {
-    const raw = fs.readFileSync(CATALOG_PATH, 'utf8');
+    const raw = fs.readFileSync(catalogFilePath, 'utf8');
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((item): item is VaultBook => {
@@ -115,7 +134,7 @@ function readCatalog(): VaultBook[] {
         return false;
       }
       try {
-        const filePath = resolveVaultFilePath(item.storedFilename);
+        const filePath = resolvePdfPathInDir(filesDir, item.storedFilename);
         return fs.existsSync(filePath);
       } catch {
         return false;
@@ -124,6 +143,62 @@ function readCatalog(): VaultBook[] {
   } catch {
     return [];
   }
+}
+
+function readCatalog(): VaultBook[] {
+  return readBookListFromFile(CATALOG_PATH, VAULT_FILES_DIR);
+}
+
+function readRepoLibrary(): VaultBook[] {
+  return readBookListFromFile(LIBRARY_CATALOG_PATH, LIBRARY_BOOKS_DIR);
+}
+
+function readOverrides(): Record<string, BookOverride> {
+  if (!fs.existsSync(OVERRIDES_PATH)) {
+    return {};
+  }
+  try {
+    const raw = fs.readFileSync(OVERRIDES_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as Record<string, BookOverride>;
+  } catch {
+    return {};
+  }
+}
+
+function writeOverrides(overrides: Record<string, BookOverride>): void {
+  const tempPath = `${OVERRIDES_PATH}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(overrides, null, 2), 'utf8');
+  fs.renameSync(tempPath, OVERRIDES_PATH);
+}
+
+function applyOverride(book: VaultBook, override?: BookOverride): VaultBook {
+  if (!override) return book;
+  return {
+    ...book,
+    ...(typeof override.notes === 'string' ? { notes: override.notes } : {}),
+    ...(override.readingStatus ? { readingStatus: override.readingStatus } : {}),
+  };
+}
+
+function getCombinedCatalog(): VaultBook[] {
+  const uploads = readCatalog();
+  const repoBooks = readRepoLibrary();
+  const overrides = readOverrides();
+  const uploadKeys = new Set(uploads.map((item) => item.bookKey).filter(Boolean));
+
+  const visibleRepoBooks = repoBooks
+    .filter((book) => {
+      if (overrides[book.id]?.hidden) return false;
+      if (book.bookKey && uploadKeys.has(book.bookKey)) return false;
+      return true;
+    })
+    .map((book) => applyOverride(book, overrides[book.id]));
+
+  return [...uploads, ...visibleRepoBooks];
 }
 
 function writeCatalog(items: VaultBook[]): void {
@@ -141,6 +216,20 @@ function mutateCatalog(updater: (current: VaultBook[]) => VaultBook[]): Promise<
     writeCatalog(updated);
   });
   catalogLock = next.catch(() => {});
+  return next;
+}
+
+let overridesLock: Promise<void> = Promise.resolve();
+
+function mutateOverrides(
+  updater: (current: Record<string, BookOverride>) => Record<string, BookOverride>
+): Promise<void> {
+  const next = overridesLock.then(() => {
+    const current = readOverrides();
+    const updated = updater(current);
+    writeOverrides(updated);
+  });
+  overridesLock = next.catch(() => {});
   return next;
 }
 
@@ -334,6 +423,177 @@ function buildRequestedBooksCatalog(vault: VaultBook[]): RequestedBookSpec[] {
       summary:
         'Explains how everyday investors can spot tenbaggers by categorizing companies into slow growers, stalwarts, fast growers, cyclicals, turnarounds, and asset plays.',
       storedItem: findStored('one-up-on-wall-street'),
+    },
+    {
+      bookKey: 'scientific-stock-speculation',
+      accessionCode: 'FOL.1920.04',
+      title: 'Scientific Stock Speculation',
+      subtitle: 'Foundational Dow essays on price trends and risk management',
+      author: 'Charles H. Dow',
+      year: 1920,
+      rights: 'public_domain',
+      rightsLabel: 'Public Domain (US Pre-1931)',
+      rightsExplanation: 'Public-domain compilation of Charles Dow’s foundational Wall Street essays.',
+      coverPath: '',
+      archiveIdentifier: 'scientificstocks00dowc',
+      preferredPdfFilename: 'scientificstocks00dowc.pdf',
+      openLibraryUrl: 'https://archive.org/details/scientificstocks00dowc',
+      archiveDetailsUrl: 'https://archive.org/details/scientificstocks00dowc',
+      secondarySources: [],
+      summary: "Charles Dow's foundational essays on market trends, price movements, and disciplined speculation.",
+      storedItem: findStored('scientific-stock-speculation'),
+    },
+    {
+      bookKey: 'stock-market-barometer',
+      accessionCode: 'FOL.1922.05',
+      title: 'The Stock Market Barometer',
+      subtitle: 'Dow Theory and forecasting market movements since 1897',
+      author: 'William Peter Hamilton',
+      year: 1922,
+      rights: 'public_domain',
+      rightsLabel: 'Public Domain (US Pre-1931)',
+      rightsExplanation: 'Public-domain 1922 classic explaining Dow Theory.',
+      coverPath: '',
+      archiveIdentifier: 'stockmarketbaro00hamigoog',
+      preferredPdfFilename: 'stockmarketbaro00hamigoog.pdf',
+      openLibraryUrl: 'https://archive.org/details/stockmarketbaro00hamigoog',
+      archiveDetailsUrl: 'https://archive.org/details/stockmarketbaro00hamigoog',
+      secondarySources: [],
+      summary: 'Classic exposition of Dow Theory and the forecasting power of stock market averages since 1897.',
+      storedItem: findStored('stock-market-barometer'),
+    },
+    {
+      bookKey: 'studies-in-tape-reading',
+      accessionCode: 'FOL.1910.06',
+      title: 'Studies in Tape Reading',
+      subtitle: 'Classic treatise on price action, volume, and order flow',
+      author: 'Richard D. Wyckoff',
+      year: 1910,
+      rights: 'public_domain',
+      rightsLabel: 'Public Domain (US Pre-1931)',
+      rightsExplanation: 'Public-domain 1910 edition by Richard D. Wyckoff.',
+      coverPath: '',
+      archiveIdentifier: 'studiesintapere01wyckgoog',
+      preferredPdfFilename: 'studiesintapere01wyckgoog_text.pdf',
+      openLibraryUrl: 'https://archive.org/details/studiesintapere01wyckgoog',
+      archiveDetailsUrl: 'https://archive.org/details/studiesintapere01wyckgoog',
+      secondarySources: [],
+      summary: 'Seminal work on reading stock ticker tape, volume, price action, and institutional order flow.',
+      storedItem: findStored('studies-in-tape-reading'),
+    },
+    {
+      bookKey: 'how-i-trade-and-invest',
+      accessionCode: 'FOL.1922.07',
+      title: 'How I Trade and Invest in Stocks and Bonds',
+      subtitle: 'Thirty-three years of Wall Street methods and risk discipline',
+      author: 'Richard D. Wyckoff',
+      year: 1922,
+      rights: 'public_domain',
+      rightsLabel: 'Public Domain (US Pre-1931)',
+      rightsExplanation: 'Public-domain 1922 volume by Richard D. Wyckoff.',
+      coverPath: '',
+      archiveIdentifier: 'cu31924031269552',
+      preferredPdfFilename: 'cu31924031269552.pdf',
+      openLibraryUrl: 'https://archive.org/details/cu31924031269552',
+      archiveDetailsUrl: 'https://archive.org/details/cu31924031269552',
+      secondarySources: [],
+      summary: 'Thirty-three years of Wall Street trading and investment principles, tape reading, and risk control.',
+      storedItem: findStored('how-i-trade-and-invest'),
+    },
+    {
+      bookKey: 'abc-of-stock-speculation',
+      accessionCode: 'FOL.1903.08',
+      title: 'The A B C of Stock Speculation',
+      subtitle: 'Early Wall Street Journal compilation that coined Dow Theory',
+      author: 'S. A. Nelson',
+      year: 1903,
+      rights: 'public_domain',
+      rightsLabel: 'Public Domain (US Pre-1931)',
+      rightsExplanation: 'Public-domain 1903 edition compiling Charles Dow editorials.',
+      coverPath: '',
+      archiveIdentifier: 'abcstockspecula00nelsgoog',
+      preferredPdfFilename: 'abcstockspecula00nelsgoog_text.pdf',
+      openLibraryUrl: 'https://archive.org/details/abcstockspecula00nelsgoog',
+      archiveDetailsUrl: 'https://archive.org/details/abcstockspecula00nelsgoog',
+      secondarySources: [],
+      summary: "Introduced the term Dow Theory, compiling Charles Dow's Wall Street Journal editorials on stock speculation.",
+      storedItem: findStored('abc-of-stock-speculation'),
+    },
+    {
+      bookKey: 'pitfalls-of-speculation',
+      accessionCode: 'FOL.1906.09',
+      title: 'The Pitfalls of Speculation',
+      subtitle: 'Behavioral and structural traps in equity speculation',
+      author: 'Thomas Gibson',
+      year: 1906,
+      rights: 'public_domain',
+      rightsLabel: 'Public Domain (US Pre-1931)',
+      rightsExplanation: 'Public-domain 1906 market psychology classic.',
+      coverPath: '',
+      archiveIdentifier: 'pitfallsspecula00gibsgoog',
+      preferredPdfFilename: 'pitfallsspecula00gibsgoog_text.pdf',
+      openLibraryUrl: 'https://archive.org/details/pitfallsspecula00gibsgoog',
+      archiveDetailsUrl: 'https://archive.org/details/pitfallsspecula00gibsgoog',
+      secondarySources: [],
+      summary: 'Analyzes common behavioral and structural mistakes made by equity and commodity speculators.',
+      storedItem: findStored('pitfalls-of-speculation'),
+    },
+    {
+      bookKey: 'elements-of-speculation',
+      accessionCode: 'FOL.1913.10',
+      title: 'The Elements of Speculation',
+      subtitle: 'Market cycles, earnings reports, and security valuation',
+      author: 'Thomas Gibson',
+      year: 1913,
+      rights: 'public_domain',
+      rightsLabel: 'Public Domain (US Pre-1931)',
+      rightsExplanation: 'Public-domain 1913 edition by Thomas Gibson.',
+      coverPath: '',
+      archiveIdentifier: 'cu31924013779438',
+      preferredPdfFilename: 'cu31924013779438.pdf',
+      openLibraryUrl: 'https://archive.org/details/cu31924013779438',
+      archiveDetailsUrl: 'https://archive.org/details/cu31924013779438',
+      secondarySources: [],
+      summary: 'Covers market cycles, manipulation, crop and earnings reports, and security valuation fundamentals.',
+      storedItem: findStored('elements-of-speculation'),
+    },
+    {
+      bookKey: 'business-barometers',
+      accessionCode: 'FOL.1911.11',
+      title: 'Business Barometers Used in the Accumulation of Money',
+      subtitle: 'Macroeconomic cycles and long-term capital allocation',
+      author: 'Roger Ward Babson',
+      year: 1911,
+      rights: 'public_domain',
+      rightsLabel: 'Public Domain (US Pre-1931)',
+      rightsExplanation: 'Public-domain 1911 treatise by Roger Ward Babson.',
+      coverPath: '',
+      archiveIdentifier: 'businessbaromet04babsgoog',
+      preferredPdfFilename: 'businessbaromet04babsgoog.pdf',
+      openLibraryUrl: 'https://archive.org/details/businessbaromet04babsgoog',
+      archiveDetailsUrl: 'https://archive.org/details/businessbaromet04babsgoog',
+      secondarySources: [],
+      summary: 'Foundational treatise on macroeconomic indicators, market cycles, and long-term capital accumulation.',
+      storedItem: findStored('business-barometers'),
+    },
+    {
+      bookKey: 'extraordinary-popular-delusions',
+      accessionCode: 'FOL.1841.12',
+      title: 'Memoirs of Extraordinary Popular Delusions',
+      subtitle: 'Historical study of speculative bubbles and crowd psychology',
+      author: 'Charles Mackay',
+      year: 1841,
+      rights: 'public_domain',
+      rightsLabel: 'Public Domain (US Pre-1931)',
+      rightsExplanation: 'Public-domain 1841 classic by Charles Mackay.',
+      coverPath: '',
+      archiveIdentifier: 'memoirsextraord12mackgoog',
+      preferredPdfFilename: 'memoirsextraord12mackgoog.pdf',
+      openLibraryUrl: 'https://archive.org/details/memoirsextraord12mackgoog',
+      archiveDetailsUrl: 'https://archive.org/details/memoirsextraord12mackgoog',
+      secondarySources: [],
+      summary: 'Classic chronicle of crowd psychology and financial manias including the South Sea Bubble and Tulipomania.',
+      storedItem: findStored('extraordinary-popular-delusions'),
     },
   ];
 }
@@ -660,6 +920,303 @@ const INFOBOOKS_TRADING_BOOKS: EbookDefinition[] = [
     filename: 'short-swing-trading-david-graeme-smith-417.pdf',
     pdfUrl: 'https://pdf.infobooks.org/ING/PDF/short-swing-trading-david-graeme-smith-417.pdf',
   },
+  {
+    bookKey: 'ib-first-time-investor',
+    indexNumber: 16,
+    title: 'First-Time Investor: Grow and Protect Your Money',
+    authorOrFocus: 'Paul A. Merriman & Richard Buck',
+    description: 'Core habits and portfolio choices that shape long-term equity and wealth returns.',
+    filename: '01.First-Time-Investor-Grow-and-Protect-your-Money-Autor-Paul-A.-Merriman-and-Richard-Buck.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/01.First-Time-Investor-Grow-and-Protect-your-Money-Autor-Paul-A.-Merriman-and-Richard-Buck.pdf',
+  },
+  {
+    bookKey: 'ib-good-investor',
+    indexNumber: 17,
+    title: 'The Good Investor',
+    authorOrFocus: 'Adrian Hornsby & Gabi Blumberg',
+    description: 'Practical framework for screening opportunities, allocating capital, and measuring portfolio results.',
+    filename: 'The-Good-Investor-Adrian-Hornsby-Gabi-Blumberg.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/The-Good-Investor-Adrian-Hornsby-Gabi-Blumberg.pdf',
+  },
+  {
+    bookKey: 'ib-investing-for-beginners',
+    indexNumber: 18,
+    title: 'Investing for Beginners',
+    authorOrFocus: 'The Motley Fool',
+    description: 'Plain-language introduction to stock investing, compounding, and long-term wealth building.',
+    filename: 'Investing-for-Beginners-The-Motley-Fool.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/Investing-for-Beginners-The-Motley-Fool.pdf',
+  },
+  {
+    bookKey: 'ib-guide-to-investing',
+    indexNumber: 19,
+    title: 'A Guide to Investing',
+    authorOrFocus: 'Schroders',
+    description: 'Institutional overview of risk, inflation protection, asset classes, and portfolio construction.',
+    filename: '15.A-Guide-to-Investing-Autor-Schroders.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/15.A-Guide-to-Investing-Autor-Schroders.pdf',
+  },
+  {
+    bookKey: 'ib-become-successful-investor',
+    indexNumber: 20,
+    title: 'How to Become a Successful Investor',
+    authorOrFocus: 'Matti Korhonen',
+    description: 'Beginner guide centered on stock market investing, brokerage orders, and valuation.',
+    filename: '16.Beginner-s-Guide-How-to-Become-a-Successful-Investor-Autor-MattiKorhonen.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/16.Beginner-s-Guide-How-to-Become-a-Successful-Investor-Autor-MattiKorhonen.pdf',
+  },
+  {
+    bookKey: 'ib-guide-young-investors',
+    indexNumber: 21,
+    title: 'Guide for Young Investors',
+    authorOrFocus: 'Capital Market Authority',
+    description: 'Choosing securities, evaluating performance, and managing portfolio risk.',
+    filename: '02.Guide-for-Young-Investors-Autor-Capital-Market-Authority.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/02.Guide-for-Young-Investors-Autor-Capital-Market-Authority.pdf',
+  },
+  {
+    bookKey: 'ib-first-steps-investing',
+    indexNumber: 22,
+    title: 'First Steps to Investing',
+    authorOrFocus: 'Prithvi Haldea',
+    description: 'Covers compounding, equity allocation, and how primary and secondary capital markets operate.',
+    filename: '17.First-Steps-to-Investing-Autor-Prithvi-Haldea.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/17.First-Steps-to-Investing-Autor-Prithvi-Haldea.pdf',
+  },
+  {
+    bookKey: 'ib-investment-strategy-quarterly',
+    indexNumber: 23,
+    title: 'Investment Strategy Quarterly',
+    authorOrFocus: 'Raymond James',
+    description: 'Macroeconomic outlook and equity market strategy covering forces shaping portfolio returns.',
+    filename: 'Investment-Strategy-Ouarterly-Raymond-James.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/Investment-Strategy-Ouarterly-Raymond-James.pdf',
+  },
+  {
+    bookKey: 'ib-investment-strategy-fidelity',
+    indexNumber: 24,
+    title: 'Investment Strategy Guide',
+    authorOrFocus: 'Fidelity Investments',
+    description: 'Explains asset allocation, diversification, rebalancing, and tax-efficient equity investing.',
+    filename: 'Investment-Strategy-Fidelity-Investments.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/Investment-Strategy-Fidelity-Investments.pdf',
+  },
+  {
+    bookKey: 'ib-investment-dictionary',
+    indexNumber: 25,
+    title: 'Investment Dictionary',
+    authorOrFocus: 'Mercer',
+    description: 'Reference dictionary decoding capital markets, equity, fund, and portfolio management terminology.',
+    filename: '09.Investment-Dictionary-Autor-Mercer.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/09.Investment-Dictionary-Autor-Mercer.pdf',
+  },
+  {
+    bookKey: 'ib-stock-investing-101',
+    indexNumber: 26,
+    title: 'Stock Investing 101',
+    authorOrFocus: 'Young Investors Society',
+    description: 'Structured curriculum on how stocks work, analyzing economic moats, valuing companies, and building a portfolio.',
+    filename: 'Stock-Investing-101-Young-Investors-Society.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/Stock-Investing-101-Young-Investors-Society.pdf',
+  },
+  {
+    bookKey: 'ib-basics-investing-stocks',
+    indexNumber: 27,
+    title: 'The Basics for Investing in Stocks',
+    authorOrFocus: "Kiplinger's Personal Finance",
+    description: 'Covers stock categories, fundamental stock selection, key valuation metrics, and sell discipline.',
+    filename: '12.The-Basics-for-Investing-in-Stocks-Autor-Kiplinger-s-Personal-Finance.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/12.The-Basics-for-Investing-in-Stocks-Autor-Kiplinger-s-Personal-Finance.pdf',
+  },
+  {
+    bookKey: 'ib-financial-investments-stock-markets',
+    indexNumber: 28,
+    title: 'Financial Investments and Stock Markets',
+    authorOrFocus: 'Capital Market Authority',
+    description: 'Foundational guide to how financial investments and stock exchanges function.',
+    filename: '10.Financial-Investments-and-Stock-Markets-Autor-Capital-Market-Authority.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/10.Financial-Investments-and-Stock-Markets-Autor-Capital-Market-Authority.pdf',
+  },
+  {
+    bookKey: 'ib-saving-investing-sec',
+    indexNumber: 29,
+    title: 'Saving and Investing Roadmap',
+    authorOrFocus: 'U.S. Securities and Exchange Commission',
+    description: 'Official SEC guide to stocks, bonds, mutual funds, asset allocation, and investor protection.',
+    filename: '30.Saving-and-Investing-Autor-SEC.gov.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/30.Saving-and-Investing-Autor-SEC.gov.pdf',
+  },
+  {
+    bookKey: 'ib-12-principles-investing',
+    indexNumber: 30,
+    title: '12 Principles for Saving and Investing',
+    authorOrFocus: 'Association Française de la Gestion Financière',
+    description: 'Twelve enduring principles for risk tolerance, diversification, and medium-to-long-term market investing.',
+    filename: '12-principles-for-saving-and-investing-Association-Fran-aise-de-la-Gestion-financi-re.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/275%20Investment/12-principles-for-saving-and-investing-Association-Fran-aise-de-la-Gestion-financi-re.pdf',
+  },
+  {
+    bookKey: 'ib-intro-investment-banking',
+    indexNumber: 31,
+    title: 'Introduction to Investment Banking',
+    authorOrFocus: 'John L. Teall',
+    description: 'Covers IPOs, underwriting, mergers and acquisitions, leveraged buyouts, and institutional brokerage.',
+    filename: 'introduction-to-investment-banking-john-l-teall-8193.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/introduction-to-investment-banking-john-l-teall-8193.pdf',
+  },
+  {
+    bookKey: 'ib-investment-banking',
+    indexNumber: 32,
+    title: 'Investment Banking',
+    authorOrFocus: 'Institute of Bankers',
+    description: 'Comprehensive look at capital raising, equity advisory work, and institutional market transactions.',
+    filename: 'investment-banking-institute-of-bankers-8194.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/investment-banking-institute-of-bankers-8194.pdf',
+  },
+  {
+    bookKey: 'ib-investment-banking-securities',
+    indexNumber: 33,
+    title: 'Investment Banking and Securities Issuance',
+    authorOrFocus: 'Jay R. Ritter',
+    description: 'Authoritative academic overview of IPO pricing, underwriting mechanics, and securities issuance.',
+    filename: 'investment-banking-and-securities-issuance-jay-r-ritter-8195.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/investment-banking-and-securities-issuance-jay-r-ritter-8195.pdf',
+  },
+  {
+    bookKey: 'ib-japanese-candlesticks',
+    indexNumber: 34,
+    title: 'How to Trade With Japanese Candlesticks',
+    authorOrFocus: 'Swissquote',
+    description: 'Illustrated catalogue of bullish and bearish candlestick reversal patterns and market validation rules.',
+    filename: 'how-to-trade-with-japanese-candlesticks-swissquote-9078.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/how-to-trade-with-japanese-candlesticks-swissquote-9078.pdf',
+  },
+  {
+    bookKey: 'ib-chart-patterns-fidelity',
+    indexNumber: 35,
+    title: 'Identifying Chart Patterns With Technical Analysis',
+    authorOrFocus: 'Fidelity Investments',
+    description: 'Fidelity technical analysis workbook covering trendlines, support/resistance, and continuation/reversal patterns.',
+    filename: 'identifying-chart-patterns-with-technical-analysis-fidelity-investments-9079.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/identifying-chart-patterns-with-technical-analysis-fidelity-investments-9079.pdf',
+  },
+  {
+    bookKey: 'ib-smart-money-concept',
+    indexNumber: 36,
+    title: 'Smart Money Concept Trading Strategy',
+    authorOrFocus: 'Oreoluwa Fakolujo',
+    description: 'Covers order blocks, liquidity zones, institutional market structure shifts, and classic price action.',
+    filename: 'smart-money-concept-trading-strategy-oreoluwa-fakolujo-9075.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/smart-money-concept-trading-strategy-oreoluwa-fakolujo-9075.pdf',
+  },
+  {
+    bookKey: 'ib-trading-strategy-playbook',
+    indexNumber: 37,
+    title: 'Trading Strategy Playbook',
+    authorOrFocus: 'OspreyFX',
+    description: 'Compares day trading, scalping, and swing trading styles with execution and capital requirements.',
+    filename: 'trading-strategy-playbook-ospreyfx-9071.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/trading-strategy-playbook-ospreyfx-9071.pdf',
+  },
+  {
+    bookKey: 'ib-quick-start-trading-coulling',
+    indexNumber: 38,
+    title: 'A Quick Start Guide to Market Trading',
+    authorOrFocus: 'Anna Coulling',
+    description: 'Covers market participants, price discovery, trading psychology, and foundational technical analysis.',
+    filename: 'a-quick-start-guide-to-forex-trading-anna-coulling-9077.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/a-quick-start-guide-to-forex-trading-anna-coulling-9077.pdf',
+  },
+  {
+    bookKey: 'ib-forex-trading-strategies',
+    indexNumber: 39,
+    title: '7 Trading Strategies',
+    authorOrFocus: 'Harry Turner',
+    description: 'Step-by-step entry/exit rules, position sizing, and market regime filtering across 7 technical strategies.',
+    filename: '7.-Forex-Trading-Strategies-Author-Harry-Turner.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/537%20Forex/7.-Forex-Trading-Strategies-Author-Harry-Turner.pdf',
+  },
+  {
+    bookKey: 'ib-charts-how-to-read',
+    indexNumber: 40,
+    title: 'Price Charts and How to Read Them',
+    authorOrFocus: 'Soho Markets',
+    description: 'Annotated guide to line, bar, and candlestick charts, double tops, head-and-shoulders, and triangles.',
+    filename: 'Forex-charts-and-how-to-read-them-Soho-Markets.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/537%20Forex/Forex-charts-and-how-to-read-them-Soho-Markets.pdf',
+  },
+  {
+    bookKey: 'ib-types-of-indicators',
+    indexNumber: 41,
+    title: 'Types of Technical Indicators',
+    authorOrFocus: 'Soho Markets',
+    description: 'Concise reference on moving averages, MACD, RSI, Bollinger Bands, and momentum oscillators.',
+    filename: 'Type-of-forex-indicators-Soho-Markets.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/537%20Forex/Type-of-forex-indicators-Soho-Markets.pdf',
+  },
+  {
+    bookKey: 'ib-derivatives-markets-fed',
+    indexNumber: 42,
+    title: 'FX and Interest Rate Derivatives Markets',
+    authorOrFocus: 'Federal Reserve Bank of New York',
+    description: 'Federal Reserve survey detailing institutional derivatives turnover by instrument and counterparty.',
+    filename: 'the-foreign-exchange-and-interest-rate-derivatives-markets-federal-reserve-bank-of-new-york-9072.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/the-foreign-exchange-and-interest-rate-derivatives-markets-federal-reserve-bank-of-new-york-9072.pdf',
+  },
+  {
+    bookKey: 'ib-applied-corporate-finance',
+    indexNumber: 43,
+    title: 'Applied Corporate Finance',
+    authorOrFocus: 'Aswath Damodaran',
+    description: 'NYU Stern valuation expert Aswath Damodaran on investment analysis, capital structure, dividends, and firm valuation.',
+    filename: 'applied-corporate-finance-aswath-damodaran-2023.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/applied-corporate-finance-aswath-damodaran-2023.pdf',
+  },
+  {
+    bookKey: 'ib-corporate-finance-theory',
+    indexNumber: 44,
+    title: 'Corporate Finance: Theory and Practice',
+    authorOrFocus: 'Pierre Vernimmen, Pascal Quiry, Yann Le Fur',
+    description: 'Comprehensive corporate finance text covering financial statement analysis, DCF valuation, M&A, and securities.',
+    filename: 'corporate-finance-theory-and-practice-pierre-vernimmen-pascal-quiry-yann-le-fur-2022.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/corporate-finance-theory-and-practice-pierre-vernimmen-pascal-quiry-yann-le-fur-2022.pdf',
+  },
+  {
+    bookKey: 'ib-corporate-finance-notes',
+    indexNumber: 45,
+    title: 'Corporate Finance Study Notes',
+    authorOrFocus: 'Zhipeng Yan',
+    description: '25 chapters covering NPV, CAPM, cost of capital, options, derivatives, and corporate valuation.',
+    filename: 'corporate-finance-study-notes-zhipeng-yan-2024.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/PDF/corporate-finance-study-notes-zhipeng-yan-2024.pdf',
+  },
+  {
+    bookKey: 'ib-principles-of-finance',
+    indexNumber: 46,
+    title: 'Principles of Finance',
+    authorOrFocus: 'Julie Dahlquist & Rainford Knight',
+    description: 'Peer-reviewed OpenStax textbook covering stocks, bonds, valuation, risk-return, and capital markets.',
+    filename: 'Principles-of-Finance-Julie-Dahlquist-Rainford-Knight.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/271%20Finances/Principles-of-Finance-Julie-Dahlquist-Rainford-Knight.pdf',
+  },
+  {
+    bookKey: 'ib-business-finance-murray',
+    indexNumber: 47,
+    title: 'Business Finance',
+    authorOrFocus: 'Tim Murray',
+    description: 'Core equity and corporate finance lecture notes covering time value of money, stock valuation, and cost of capital.',
+    filename: 'Business-Finance-Tim-Murray.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/271%20Finances/Business-Finance-Tim-Murray.pdf',
+  },
+  {
+    bookKey: 'ib-intro-financial-market',
+    indexNumber: 48,
+    title: 'Introduction to Financial Markets',
+    authorOrFocus: 'Siddharth Bagri, G.C. Sharma, Ashok Wadhwa',
+    description: 'Introduces securities markets, primary/secondary trading, derivatives, mutual funds, and risk management.',
+    filename: '07.-An-Introduction-to-Financial-Market-Part-I-for-Class-XI-Author-Mr.-Siddharth-Bagri-Mr.-G.C.-Sharma-Mr.-Ashok-Wadhwa.pdf',
+    pdfUrl: 'https://pdf.infobooks.org/ING/271%20Finances/07.-An-Introduction-to-Financial-Market-Part-I-for-Class-XI-Author-Mr.-Siddharth-Bagri-Mr.-G.C.-Sharma-Mr.-Ashok-Wadhwa.pdf',
+  },
 ];
 
 async function storeInfoBookFromCatalog(bookKey: string): Promise<VaultBook> {
@@ -894,10 +1451,28 @@ async function startServer() {
     total: 0,
   };
 
-  async function syncMissingCuratedBooks(): Promise<void> {
+  async function syncMissingCuratedBooks(unhideRepoBooks = false): Promise<void> {
     if (syncState.syncing) return;
 
-    const existing = readCatalog();
+    if (unhideRepoBooks) {
+      await mutateOverrides((current) => {
+        const next: Record<string, BookOverride> = {};
+        for (const [id, entry] of Object.entries(current)) {
+          if (entry.hidden) {
+            const rest = { ...entry };
+            delete rest.hidden;
+            if (Object.keys(rest).length > 0) {
+              next[id] = rest;
+            }
+          } else {
+            next[id] = entry;
+          }
+        }
+        return next;
+      });
+    }
+
+    const existing = getCombinedCatalog();
     const existingKeys = new Set(existing.map((item) => item.bookKey).filter(Boolean));
 
     const missingInfobooks = INFOBOOKS_TRADING_BOOKS.filter(
@@ -957,11 +1532,11 @@ async function startServer() {
 
     await Promise.all(workers);
     syncState.syncing = false;
-    console.log(`Vault sync finished: ${readCatalog().length} books stored.`);
+    console.log(`Vault sync finished: ${getCombinedCatalog().length} books available.`);
   }
 
   app.get('/api/collections/infobooks-trading', (_req: Request, res: Response) => {
-    const vault = readCatalog();
+    const vault = getCombinedCatalog();
     const books = INFOBOOKS_TRADING_BOOKS.map((def) => ({
       ...def,
       sourcePageUrl: INFOBOOKS_SOURCE_PAGE,
@@ -980,6 +1555,26 @@ async function startServer() {
         return;
       }
 
+      const repoMatch = readRepoLibrary().find((entry) => entry.bookKey === bookKey);
+      if (repoMatch) {
+        await mutateOverrides((current) => {
+          const entry = current[repoMatch.id];
+          if (!entry?.hidden) return current;
+          const next = { ...current };
+          const updatedEntry = { ...entry };
+          delete updatedEntry.hidden;
+          if (Object.keys(updatedEntry).length > 0) {
+            next[repoMatch.id] = updatedEntry;
+          } else {
+            delete next[repoMatch.id];
+          }
+          return next;
+        });
+        const merged = applyOverride(repoMatch, readOverrides()[repoMatch.id]);
+        res.status(200).json({ item: merged });
+        return;
+      }
+
       const item = await storeInfoBookFromCatalog(bookKey);
       res.status(201).json({ item });
     } catch (err) {
@@ -989,12 +1584,12 @@ async function startServer() {
   });
 
   app.get('/api/books/requested', (_req: Request, res: Response) => {
-    const vault = readCatalog();
+    const vault = getCombinedCatalog();
     res.json({ books: buildRequestedBooksCatalog(vault) });
   });
 
   app.get('/api/collections/swing-trade-ebooks', async (_req: Request, res: Response) => {
-    const vault = readCatalog();
+    const vault = getCombinedCatalog();
     const probeMap = await probeSwingTradeEbooks();
     const ebooks: SwingTradeEbook[] = SWING_TRADE_EBOOKS.map((def) => {
       const probe = probeMap[def.bookKey];
@@ -1020,6 +1615,26 @@ async function startServer() {
     try {
       const body = (req.body || {}) as { bookKey?: string };
       const bookKey = String(body.bookKey || '').trim();
+      const repoMatch = readRepoLibrary().find((entry) => entry.bookKey === bookKey);
+      if (repoMatch) {
+        await mutateOverrides((current) => {
+          const entry = current[repoMatch.id];
+          if (!entry?.hidden) return current;
+          const next = { ...current };
+          const updatedEntry = { ...entry };
+          delete updatedEntry.hidden;
+          if (Object.keys(updatedEntry).length > 0) {
+            next[repoMatch.id] = updatedEntry;
+          } else {
+            delete next[repoMatch.id];
+          }
+          return next;
+        });
+        const merged = applyOverride(repoMatch, readOverrides()[repoMatch.id]);
+        res.status(200).json({ item: merged });
+        return;
+      }
+
       const result = await storeSwingTradeEbookFromCatalog(bookKey);
       if (!result.item) {
         res.status(result.statusCode || 500).json({ error: result.error });
@@ -1033,7 +1648,7 @@ async function startServer() {
   });
 
   app.get('/api/vault', (_req: Request, res: Response) => {
-    const items = readCatalog();
+    const items = getCombinedCatalog();
     const totalBytes = items.reduce((sum, item) => sum + (item.sizeBytes || 0), 0);
     res.json({
       items,
@@ -1047,7 +1662,7 @@ async function startServer() {
   });
 
   app.post('/api/vault/sync', (_req: Request, res: Response) => {
-    void syncMissingCuratedBooks();
+    void syncMissingCuratedBooks(true);
     res.status(202).json({
       syncing: syncState.syncing,
       syncProgress: {
@@ -1246,15 +1861,21 @@ async function startServer() {
 
   app.get('/api/vault/:id/file', (req: Request, res: Response) => {
     const id = String(req.params.id || '');
-    const catalog = readCatalog();
-    const item = catalog.find((entry) => entry.id === id);
+    const uploadItem = readCatalog().find((entry) => entry.id === id);
+    const overrides = readOverrides();
+    const repoItem = !uploadItem && !overrides[id]?.hidden
+      ? readRepoLibrary().find((entry) => entry.id === id)
+      : undefined;
+    const item = uploadItem || repoItem;
     if (!item) {
       res.status(404).json({ error: 'Stored PDF not found in vault.' });
       return;
     }
 
     try {
-      const filePath = resolveVaultFilePath(item.storedFilename);
+      const filePath = uploadItem
+        ? resolveVaultFilePath(item.storedFilename)
+        : resolveLibraryFilePath(item.storedFilename);
       if (!fs.existsSync(filePath)) {
         res.status(404).json({ error: 'PDF file missing on disk.' });
         return;
@@ -1267,7 +1888,10 @@ async function startServer() {
         'Content-Disposition',
         `${isDownload ? 'attachment' : 'inline'}; filename="${safeName}"`
       );
-      fs.createReadStream(filePath).pipe(res);
+      if (!uploadItem && !isDownload) {
+        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      }
+      res.sendFile(filePath);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to stream PDF.';
       res.status(400).json({ error: message });
@@ -1303,6 +1927,30 @@ async function startServer() {
     });
 
     if (!updatedItem) {
+      const repoBook = readRepoLibrary().find((entry) => entry.id === id);
+      if (repoBook && !readOverrides()[id]?.hidden) {
+        let merged: VaultBook = repoBook;
+        await mutateOverrides((current) => {
+          const prev = current[id] || {};
+          const nextEntry: BookOverride = { ...prev };
+          if (typeof body.notes === 'string') {
+            nextEntry.notes = body.notes.slice(0, 10000);
+          }
+          if (
+            body.readingStatus === 'unread' ||
+            body.readingStatus === 'reading' ||
+            body.readingStatus === 'completed'
+          ) {
+            nextEntry.readingStatus = body.readingStatus;
+          }
+          merged = applyOverride(repoBook, nextEntry);
+          return { ...current, [id]: nextEntry };
+        });
+        updatedItem = merged;
+      }
+    }
+
+    if (!updatedItem) {
       res.status(404).json({ error: 'Stored book not found.' });
       return;
     }
@@ -1323,6 +1971,18 @@ async function startServer() {
         }
         return current.filter((entry) => entry.id !== id);
       });
+
+      if (!removed) {
+        const repoBook = readRepoLibrary().find((entry) => entry.id === id);
+        if (repoBook && !readOverrides()[id]?.hidden) {
+          await mutateOverrides((current) => ({
+            ...current,
+            [id]: { ...(current[id] || {}), hidden: true },
+          }));
+          removed = repoBook;
+        }
+      }
+
       if (!removed) {
         res.status(404).json({ error: 'Stored book not found.' });
         return;

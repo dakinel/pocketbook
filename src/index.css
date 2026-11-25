@@ -8,8 +8,8 @@
 
 :root {
   --w: clamp(136px, 16.5vw, 206px);
-  --noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85 .05' numOctaves='3' seed='4'/%3E%3CfeColorMatrix values='0 0 0 0 .04 0 0 0 0 .09 0 0 0 0 .2 0 0 0 1.2 -.4'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  --stitch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 120' preserveAspectRatio='none'%3E%3Cdefs%3E%3CradialGradient id='r' cx='.35' cy='.3' r='.8'%3E%3Cstop offset='0' stop-color='%23f6c58e'/%3E%3Cstop offset='.5' stop-color='%23b8602a'/%3E%3Cstop offset='1' stop-color='%236b3010'/%3E%3C/radialGradient%3E%3Cg id='t' fill='none' stroke-dasharray='2.4 1' stroke-width='.9'%3E%3Cpath d='M5 9.5H95M5 12.8H95'/%3E%3Cpath d='M8.5 17V68.1L50 109.6L91.5 68.1V17'/%3E%3Cpath d='M12 36C30 60 44 74 50 90C56 74 70 60 88 36'/%3E%3Cpath d='M12 43C29 64 43 78 50 97C57 78 71 64 88 43'/%3E%3C/g%3E%3C/defs%3E%3Cpath d='M4 15.6H96' stroke='%230a1a2e' stroke-width='1.4' opacity='.45'/%3E%3Cpath d='M4 6.4H96' stroke='%23a9cdf0' stroke-width='.8' opacity='.5'/%3E%3Cuse href='%23t' x='.3' y='.5' stroke='%230a1a2e' opacity='.55'/%3E%3Cuse href='%23t' stroke='%23e0a53f'/%3E%3Ccircle cx='8' cy='11.2' r='2.4' fill='url(%23r)' stroke='%2345200a' stroke-width='.5'/%3E%3Ccircle cx='92' cy='11.2' r='2.4' fill='url(%23r)' stroke='%2345200a' stroke-width='.5'/%3E%3C/svg%3E");
+  --plaster-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.72' numOctaves='3' seed='7'/%3E%3CfeColorMatrix values='0 0 0 0 .12 0 0 0 0 .12 0 0 0 0 .13 0 0 0 .14 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --pocket-stitch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 120' preserveAspectRatio='none'%3E%3Cdefs%3E%3CradialGradient id='brass' cx='.35' cy='.3' r='.8'%3E%3Cstop offset='0' stop-color='%23f7d89c'/%3E%3Cstop offset='.55' stop-color='%23b5823b'/%3E%3Cstop offset='1' stop-color='%23593c14'/%3E%3C/radialGradient%3E%3Cg id='seam' fill='none' stroke-dasharray='2.2 1.2' stroke-width='.75'%3E%3Cpath d='M5 9.5H95M5 12.8H95'/%3E%3Cpath d='M8.5 17V68.1L50 109.6L91.5 68.1V17'/%3E%3Cpath d='M16 42L50 74L84 42' opacity='.55'/%3E%3C/g%3E%3C/defs%3E%3Cpath d='M4 15.6H96' stroke='%23000000' stroke-width='1.5' opacity='.5'/%3E%3Cpath d='M4 6.2H96' stroke='%23ffffff' stroke-width='.9' opacity='.18'/%3E%3Cuse href='%23seam' x='.3' y='.5' stroke='%23000000' opacity='.5'/%3E%3Cuse href='%23seam' stroke='%23d4a962' opacity='.8'/%3E%3Ccircle cx='8.5' cy='11.2' r='2.2' fill='url(%23brass)' stroke='%232e1e08' stroke-width='.5'/%3E%3Ccircle cx='91.5' cy='11.2' r='2.2' fill='url(%23brass)' stroke='%232e1e08' stroke-width='.5'/%3E%3C/svg%3E");
 }
 
 @layer base {
@@ -27,52 +27,120 @@
   font-variant-numeric: tabular-nums;
 }
 
-.denim-canvas {
+.gallery-wall-canvas {
   min-height: 100vh;
   padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
   background:
-    radial-gradient(ellipse at 50% 30%, transparent 40%, rgba(0, 0, 0, 0.45)),
-    var(--noise),
+    radial-gradient(ellipse 75% 42% at 50% 0%, rgba(243, 198, 119, 0.08), transparent 68%),
+    radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(4, 5, 8, 0.72)),
+    var(--plaster-grain),
     repeating-linear-gradient(
-      63deg,
-      rgba(255, 255, 255, 0.05) 0 1.5px,
-      rgba(0, 0, 0, 0.1) 1.5px 3px
+      180deg,
+      rgba(255, 255, 255, 0.018) 0px,
+      rgba(255, 255, 255, 0.018) 1px,
+      transparent 1px,
+      transparent 220px,
+      rgba(0, 0, 0, 0.24) 220px,
+      rgba(0, 0, 0, 0.24) 224px,
+      transparent 224px,
+      transparent 440px
     ),
-    #1d3a5c;
-  background-size: 100% 100%, 240px 240px, auto, auto;
+    linear-gradient(180deg, #171a20 0%, #111317 48%, #0d0f13 100%);
+  background-size: 100% 100%, 100% 100%, 220px 220px, 100% 440px, 100% 100%;
 }
 
 .pocket-grid {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: calc(var(--w) * 0.98 + 24px) calc(var(--w) * 0.28);
+  gap: calc(var(--w) * 0.84 + 14px) calc(var(--w) * 0.24);
   margin: 0 auto;
-  max-width: 1320px;
-  padding: calc(var(--w) * 0.85) 28px calc(var(--w) * 0.75);
+  max-width: 1340px;
+  padding: calc(var(--w) * 0.85) 28px calc(var(--w) * 0.55);
   list-style: none;
+  perspective: 1400px;
 }
 
-.jean-pocket {
+.wall-pocket {
   position: relative;
   width: var(--w);
   height: calc(var(--w) * 1.2);
   isolation: isolate;
-  transform: rotate(var(--r, 0deg));
-  filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.5));
+  --depth-scale: 1;
+  --depth-y: 0px;
+  --depth-z: 10;
+  --depth-bright: 1;
+  --depth-sat: 1;
+  --depth-shadow: drop-shadow(0 16px 14px rgba(0, 0, 0, 0.55));
+  z-index: var(--depth-z);
+  transform: translate3d(0, var(--depth-y), 0) rotate(var(--r, 0deg)) scale(var(--depth-scale));
+  filter: var(--depth-shadow) brightness(var(--depth-bright)) saturate(var(--depth-sat));
+  transition:
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.28s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.jean-pocket:nth-child(2n) {
-  margin-top: calc(var(--w) * 0.14);
+/* Four explicit spatial depth planes */
+.wall-pocket[data-depth='1'] {
+  --depth-scale: 1.08;
+  --depth-y: -16px;
+  --depth-z: 24;
+  --depth-bright: 1.08;
+  --depth-sat: 1.06;
+  --depth-shadow:
+    drop-shadow(0 32px 26px rgba(0, 0, 0, 0.82))
+    drop-shadow(0 10px 10px rgba(0, 0, 0, 0.55));
 }
 
-.jean-pocket:nth-child(5n + 1) { --r: -1.8deg; --t: 2.6deg; }
-.jean-pocket:nth-child(5n + 2) { --r: 1.4deg; --t: -3.2deg; }
-.jean-pocket:nth-child(5n + 3) { --r: -0.9deg; --t: 1.8deg; }
-.jean-pocket:nth-child(5n + 4) { --r: 1.9deg; --t: -1.6deg; }
-.jean-pocket:nth-child(5n + 5) { --r: -0.4deg; --t: 3.4deg; }
+.wall-pocket[data-depth='2'] {
+  --depth-scale: 0.99;
+  --depth-y: 6px;
+  --depth-z: 16;
+  --depth-bright: 0.98;
+  --depth-sat: 0.98;
+  --depth-shadow:
+    drop-shadow(0 20px 16px rgba(0, 0, 0, 0.66))
+    drop-shadow(0 5px 6px rgba(0, 0, 0, 0.44));
+}
 
-.jean-pocket::after {
+.wall-pocket[data-depth='3'] {
+  --depth-scale: 0.90;
+  --depth-y: 22px;
+  --depth-z: 8;
+  --depth-bright: 0.86;
+  --depth-sat: 0.9;
+  --depth-shadow:
+    drop-shadow(0 11px 9px rgba(0, 0, 0, 0.54))
+    drop-shadow(0 3px 4px rgba(0, 0, 0, 0.36));
+}
+
+.wall-pocket[data-depth='4'] {
+  --depth-scale: 0.82;
+  --depth-y: -8px;
+  --depth-z: 2;
+  --depth-bright: 0.74;
+  --depth-sat: 0.82;
+  --depth-shadow: drop-shadow(0 4px 5px rgba(0, 0, 0, 0.48));
+}
+
+.wall-pocket:hover,
+.wall-pocket:focus-within {
+  z-index: 30;
+  transform: translate3d(0, calc(var(--depth-y) - 6px), 0) rotate(0deg)
+    scale(calc(var(--depth-scale) * 1.05));
+  filter:
+    drop-shadow(0 34px 30px rgba(0, 0, 0, 0.86))
+    brightness(1.08)
+    saturate(1.06);
+}
+
+.wall-pocket:nth-child(5n + 1) { --r: -1.4deg; --t: 2.4deg; }
+.wall-pocket:nth-child(5n + 2) { --r: 1.1deg; --t: -2.8deg; }
+.wall-pocket:nth-child(5n + 3) { --r: -0.7deg; --t: 1.6deg; }
+.wall-pocket:nth-child(5n + 4) { --r: 1.5deg; --t: -1.4deg; }
+.wall-pocket:nth-child(5n + 5) { --r: -0.3deg; --t: 2.9deg; }
+
+.wall-pocket::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -80,33 +148,36 @@
   clip-path: polygon(4% 5%, 96% 5%, 96% 58%, 50% 97%, 4% 58%);
   -webkit-clip-path: polygon(4% 5%, 96% 5%, 96% 58%, 50% 97%, 4% 58%);
   background-image:
-    var(--stitch),
-    var(--noise),
-    repeating-linear-gradient(
-      63deg,
-      rgba(255, 255, 255, 0.08) 0 1.5px,
-      rgba(0, 0, 0, 0.1) 1.5px 3px
-    ),
-    radial-gradient(ellipse at 50% 38%, rgba(160, 200, 235, 0.38), transparent 62%),
-    linear-gradient(180deg, #3f71ab, #2d5788 70%, #234775);
-  background-size: 100% 100%, 240px 240px, auto, 100% 100%, 100% 100%;
-  background-repeat: no-repeat, repeat, repeat, no-repeat, no-repeat;
+    var(--pocket-stitch),
+    var(--plaster-grain),
+    radial-gradient(ellipse at 50% 24%, rgba(255, 245, 224, 0.11), transparent 62%),
+    linear-gradient(180deg, #30343d 0%, #23262e 65%, #191b21 100%);
+  background-size: 100% 100%, 220px 220px, 100% 100%, 100% 100%;
+  background-repeat: no-repeat, repeat, no-repeat, no-repeat;
 }
 
-.jean-pocket:nth-child(3n)::after {
-  filter: brightness(1.18) saturate(0.8);
+.wall-pocket:nth-child(3n)::after {
+  background-image:
+    var(--pocket-stitch),
+    var(--plaster-grain),
+    radial-gradient(ellipse at 50% 24%, rgba(255, 236, 206, 0.11), transparent 62%),
+    linear-gradient(180deg, #352d27 0%, #26201c 65%, #1b1714 100%);
 }
 
-.jean-pocket:nth-child(4n + 1)::after {
-  filter: brightness(0.82) saturate(1.1);
+.wall-pocket:nth-child(4n + 1)::after {
+  background-image:
+    var(--pocket-stitch),
+    var(--plaster-grain),
+    radial-gradient(ellipse at 50% 24%, rgba(235, 240, 245, 0.1), transparent 62%),
+    linear-gradient(180deg, #272d33 0%, #1d2227 65%, #15181c 100%);
 }
 
-.jean-pocket:nth-child(5n)::after {
-  filter: brightness(1.35) saturate(0.6) hue-rotate(-6deg);
-}
-
-.jean-pocket:nth-child(7n)::after {
-  filter: brightness(0.66) saturate(1.2);
+.wall-pocket:nth-child(5n)::after {
+  background-image:
+    var(--pocket-stitch),
+    var(--plaster-grain),
+    radial-gradient(ellipse at 50% 24%, rgba(232, 236, 226, 0.1), transparent 62%),
+    linear-gradient(180deg, #2a302d 0%, #1f2422 65%, #161a18 100%);
 }
 
 .pocket-book {
@@ -118,44 +189,113 @@
   height: calc(var(--w) * 0.94);
   transform: translateX(-50%) rotate(var(--t, 0deg));
   transform-origin: 50% 100%;
-  transition: transform 0.35s cubic-bezier(0.3, 1.4, 0.5, 1);
+  transition: transform 0.32s cubic-bezier(0.3, 1.4, 0.5, 1);
   border-radius: 3px 5px 2px 2px;
   box-shadow:
     inset 4px 0 6px rgba(0, 0, 0, 0.28),
-    0 4px 12px rgba(0, 0, 0, 0.45);
+    0 6px 14px rgba(0, 0, 0, 0.52);
   overflow: hidden;
 }
 
-.jean-pocket:hover .pocket-book,
-.jean-pocket:focus-within .pocket-book {
-  transform: translateX(-50%) translateY(-12%) rotate(calc(var(--t, 0deg) + 3deg));
+.wall-pocket:hover .pocket-book,
+.wall-pocket:focus-within .pocket-book {
+  transform: translateX(-50%) translateY(-14%) rotate(calc(var(--t, 0deg) + 2deg));
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .wall-pocket,
   .pocket-book,
   .flip-page,
+  .cover-reveal-leaf,
+  .cover-sheen::after,
+  .book-reveal-stage,
+  .bookWrapper,
+  .bookBoardLeft,
+  .baseLeft,
   .pageFoldRight,
   .pageFoldLeft {
     transition: none !important;
+    animation: none !important;
   }
 }
 
+@keyframes coverSheen {
+  0% {
+    transform: translateX(-140%) skewX(-18deg);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.55;
+  }
+  70% {
+    opacity: 0.35;
+  }
+  100% {
+    transform: translateX(220%) skewX(-18deg);
+    opacity: 0;
+  }
+}
+
+.book-reveal-stage {
+  perspective: 2200px;
+  transition:
+    transform 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.38s ease;
+  will-change: transform, opacity;
+}
+
 .bookWrapper {
-  width: 100%;
-  max-width: 1040px;
-  height: min(74vh, 660px);
+  width: min(92vw, 1080px);
+  height: min(78vh, 690px);
   margin: 0 auto;
+  transform-style: preserve-3d;
+  transform: translateX(-25%) rotateY(6deg);
+  transition: transform 1.05s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.bookWrapper.is-spread-open {
+  transform: translateX(0) rotateY(0deg);
 }
 
 .bookBg {
   position: relative;
-  background: linear-gradient(145deg, #1b1815 0%, #0d0c0a 100%);
   width: 100%;
   height: 100%;
-  border-radius: 12px;
+  transform-style: preserve-3d;
+}
+
+.bookBoardLeft {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50%;
+  height: 100%;
+  border-radius: 12px 0 0 12px;
+  background: linear-gradient(145deg, #1b1815 0%, #0d0c0a 100%);
   box-shadow:
-    0 24px 55px rgba(0, 0, 0, 0.55),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    -14px 34px 70px rgba(0, 0, 0, 0.72),
+    0 12px 24px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  opacity: 0;
+  transition: opacity 0.34s ease 0.24s;
+}
+
+.bookWrapper.is-spread-open .bookBoardLeft {
+  opacity: 1;
+}
+
+.bookBoardRight {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 50%;
+  height: 100%;
+  border-radius: 0 12px 12px 0;
+  background: linear-gradient(145deg, #1b1815 0%, #0d0c0a 100%);
+  box-shadow:
+    16px 34px 76px rgba(0, 0, 0, 0.8),
+    0 12px 26px rgba(0, 0, 0, 0.58),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
 .pageBg {
@@ -163,11 +303,9 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  background-color: #d7d2c8;
   width: calc(100% - 24px);
   height: calc(100% - 24px);
   border-radius: 2px;
-  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.18);
 }
 
 .pageWrapper {
@@ -177,8 +315,54 @@
   width: 50%;
   height: 100%;
   z-index: 5;
-  perspective: 1800px;
+  perspective: 2000px;
   -webkit-font-smoothing: antialiased;
+}
+
+.cover-reveal-leaf {
+  position: absolute;
+  inset: -4px -4px -4px 0;
+  z-index: 95;
+  transform-style: preserve-3d;
+  transform-origin: -2px center;
+  transform: rotateY(0deg);
+  border-radius: 0 10px 10px 0;
+  box-shadow:
+    8px 20px 36px rgba(0, 0, 0, 0.55),
+    inset 3px 0 6px rgba(255, 255, 255, 0.08);
+  transition:
+    transform 1.05s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.26s ease;
+  pointer-events: none;
+}
+
+.cover-reveal-leaf.is-open {
+  transform: rotateY(-180deg);
+}
+
+.cover-reveal-leaf.is-settled {
+  opacity: 0;
+}
+
+.cover-sheen {
+  position: relative;
+  overflow: hidden;
+}
+
+.cover-sheen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 20%,
+    rgba(255, 232, 179, 0.16) 46%,
+    rgba(255, 255, 255, 0.24) 50%,
+    rgba(255, 232, 179, 0.14) 54%,
+    transparent 80%
+  );
+  animation: coverSheen 1.25s cubic-bezier(0.22, 1, 0.36, 1) 0.22s both;
+  pointer-events: none;
 }
 
 .baseLeft {
@@ -189,6 +373,8 @@
   height: 100%;
   z-index: 1;
   overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.34s ease 0.26s;
   background: linear-gradient(
     to right,
     #ffffff 0%,
@@ -196,6 +382,10 @@
     #f5f3ee 97%,
     #d4d0c7 100%
   );
+}
+
+.bookWrapper.is-spread-open .baseLeft {
+  opacity: 1;
 }
 
 .baseRight {

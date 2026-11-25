@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BookPlus, Loader2, RefreshCw, Upload } from 'lucide-react';
+import { PdfCoverImage } from './components/PdfCoverImage.tsx';
 import { PdfReaderModal } from './components/PdfReaderModal.tsx';
 import { UploadPdfModal, type UploadPreset } from './components/UploadPdfModal.tsx';
 import type { VaultBook } from './types.ts';
@@ -15,15 +16,7 @@ const FILTER_TABS: Array<{ id: ShelfFilter; label: string }> = [
   { id: 'personal', label: 'Personal' },
 ];
 
-const CLOTH_PALETTES = [
-  { bg: 'bg-[#1f4d36]', accent: 'border-[#d6b36a]/55', text: 'text-[#f6efe0]' },
-  { bg: 'bg-[#6c2727]', accent: 'border-[#e6c280]/55', text: 'text-[#fbf4e8]' },
-  { bg: 'bg-[#22324d]', accent: 'border-[#d4af68]/55', text: 'text-[#f2f4f8]' },
-  { bg: 'bg-[#6b4226]', accent: 'border-[#edd19c]/55', text: 'text-[#fcf5ea]' },
-  { bg: 'bg-[#3d314a]', accent: 'border-[#dec389]/55', text: 'text-[#f6f1fa]' },
-  { bg: 'bg-[#2a4a4e]', accent: 'border-[#e0c07d]/55', text: 'text-[#eef6f6]' },
-  { bg: 'bg-[#4f3829]', accent: 'border-[#e4c486]/55', text: 'text-[#faf2e6]' },
-];
+const DEPTH_PLANES = [1, 3, 2, 4, 2, 1, 4, 3] as const;
 
 interface VaultResponsePayload {
   items: VaultBook[];
@@ -45,6 +38,12 @@ export default function App() {
   const [filter, setFilter] = useState<ShelfFilter>('all');
 
   const [activeBook, setActiveBook] = useState<VaultBook | null>(null);
+  const [originRect, setOriginRect] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadPreset, setUploadPreset] = useState<UploadPreset | null>(null);
 
@@ -153,8 +152,8 @@ export default function App() {
   }
 
   return (
-    <div className="denim-canvas flex flex-col">
-      <header className="sticky top-0 z-30 bg-[#152c47]/90 backdrop-blur-md border-b border-white/10">
+    <div className="gallery-wall-canvas flex flex-col">
+      <header className="sticky top-0 z-40 bg-[#111317]/90 backdrop-blur-md border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4">
           <a
             href="#top"
@@ -228,7 +227,7 @@ export default function App() {
             </div>
 
             {syncing ? (
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-[#102238]/85 border border-[#f3c677]/40 text-xs text-[#f3c677] font-mono tabular-nums self-start sm:self-auto">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-[#181b21]/90 border border-[#f3c677]/40 text-xs text-[#f3c677] font-mono tabular-nums self-start sm:self-auto">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 <span>
                   Syncing books
@@ -242,7 +241,7 @@ export default function App() {
 
           <div
             aria-label="Mobile and tablet shelf filters"
-            className="flex lg:hidden flex-wrap items-center gap-1.5 p-1.5 bg-[#102238]/75 rounded-md border border-white/10"
+            className="flex lg:hidden flex-wrap items-center gap-1.5 p-1.5 bg-[#181b21]/85 rounded-md border border-white/10"
           >
             {FILTER_TABS.map((tab) => (
               <button
@@ -277,79 +276,48 @@ export default function App() {
             Pulling your books from the vault...
           </div>
         ) : (
-          <ul className="pocket-grid" aria-label="Stored books in jean pockets">
+          <ul className="pocket-grid" aria-label="Stored books in layered pockets">
             {visibleBooks.map((book, idx) => {
-              const palette = CLOTH_PALETTES[idx % CLOTH_PALETTES.length];
-              const sourceLabel =
-                book.sourceType === 'infobooks'
-                  ? 'InfoBooks'
-                  : book.sourceType === 'ebook_collection'
-                    ? 'Swing-Trade'
-                    : book.sourceType === 'archive'
-                      ? 'Archive'
-                      : 'Personal';
+              const depth = DEPTH_PLANES[idx % DEPTH_PLANES.length];
               return (
-                <li key={book.id} className="jean-pocket group">
+                <li key={book.id} data-depth={depth} className="wall-pocket group">
                   <button
                     type="button"
-                    onClick={() => setActiveBook(book)}
+                    title={`${book.title} — ${book.author}`}
+                    onClick={(e) => {
+                      const bookNode = e.currentTarget.querySelector('.pocket-book');
+                      const rect = (bookNode || e.currentTarget).getBoundingClientRect();
+                      setOriginRect({
+                        left: rect.left,
+                        top: rect.top,
+                        width: rect.width,
+                        height: rect.height,
+                      });
+                      setActiveBook(book);
+                    }}
                     aria-label={`Open ${book.title} by ${book.author}`}
                     className="w-full h-full relative block text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[#f3c677] rounded-sm cursor-pointer"
                   >
-                    <div className={`pocket-book ${palette.bg}`}>
-                      {book.coverPath ? (
-                        <div className="relative w-full h-full">
-                          <img
-                            src={book.coverPath}
-                            alt={book.title}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover"
-                          />
-                          <div className="absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 via-black/45 to-transparent px-2.5 pt-2 pb-5">
-                            <p className="font-serif text-[11px] sm:text-xs font-medium leading-tight text-white line-clamp-2">
-                              {book.title}
-                            </p>
-                          </div>
-                        </div>
-                      ) : (
-                        <div
-                          className={`w-full h-full p-2.5 sm:p-3 flex flex-col justify-between ${palette.text}`}
-                        >
-                          <div className={`border ${palette.accent} rounded-[2px] p-2 h-[68%] flex flex-col justify-between`}>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-[8px] font-mono uppercase tracking-wider text-[#f3c677] truncate">
-                                {sourceLabel}
-                              </span>
-                              <span className="text-[8px] font-mono tabular-nums opacity-70 shrink-0">
-                                {formatBytes(book.sizeBytes)}
-                              </span>
-                            </div>
-                            <p className="font-serif text-[11px] sm:text-xs font-semibold leading-snug line-clamp-3">
-                              {book.title}
-                            </p>
-                            <span className="text-[9px] font-mono opacity-80 truncate">
-                              {book.author}
-                            </span>
-                          </div>
-                        </div>
-                      )}
+                    <div className="pocket-book bg-[#24272f]">
+                      <PdfCoverImage
+                        bookId={book.id}
+                        sizeBytes={book.sizeBytes}
+                        title={book.title}
+                      />
                     </div>
                   </button>
-
-                  <p className="mt-2 px-1 text-center text-xs font-medium text-white/95 leading-snug line-clamp-2 drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
-                    {book.title}
-                  </p>
-                  <p className="mt-0.5 text-center text-[10px] font-mono text-[#f3c677]/85">
-                    {sourceLabel}
-                  </p>
                 </li>
               );
             })}
 
             {!hasOneUp && (filter === 'all' || filter === 'classics' || filter === 'personal') ? (
-              <li className="jean-pocket group">
+              <li
+                data-depth={DEPTH_PLANES[visibleBooks.length % DEPTH_PLANES.length]}
+                className="wall-pocket group"
+              >
                 <button
                   type="button"
+                  title="One Up on Wall Street — Insert Personal PDF"
                   onClick={() => {
                     setUploadPreset({
                       bookKey: 'one-up-on-wall-street',
@@ -373,9 +341,6 @@ export default function App() {
                     </p>
                   </div>
                 </button>
-                <p className="mt-2 px-1 text-center text-xs font-medium text-[#f3c677] leading-snug drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-                  One Up on Wall Street (Add PDF)
-                </p>
               </li>
             ) : null}
           </ul>
@@ -384,7 +349,11 @@ export default function App() {
 
       <PdfReaderModal
         book={activeBook}
-        onClose={() => setActiveBook(null)}
+        originRect={originRect}
+        onClose={() => {
+          setActiveBook(null);
+          setOriginRect(null);
+        }}
         onUpdate={(updated) => {
           setActiveBook(updated);
           void loadBooks();
@@ -397,6 +366,7 @@ export default function App() {
         preset={uploadPreset}
         onClose={() => setUploadOpen(false)}
         onUploaded={(item) => {
+          setOriginRect(null);
           setActiveBook(item);
           void loadBooks();
         }}
