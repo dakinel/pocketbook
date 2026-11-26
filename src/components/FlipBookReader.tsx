@@ -2,9 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { Bookmark, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from 'lucide-react';
-import type { ReadingStatus, VaultBook } from '../types.ts';
+import type { BookKeeperColor, ReadingStatus, VaultBook } from '../types.ts';
 import {
+  BOOK_KEEPER_COLORS,
+  BOOK_KEEPER_PALETTE,
+  getBookKeeperRibbonStyle,
   getKeptPage,
+  resolveBookKeeperColor,
   resolveBookProgress,
   saveLocalBookProgress,
   type BookProgressState,
@@ -96,16 +100,21 @@ export function FlipBookReader({
   const [coverOpened, setCoverOpened] = useState(false);
   const [coverFading, setCoverFading] = useState(false);
   const [coverSettled, setCoverSettled] = useState(false);
+  const [keeperRevealed, setKeeperRevealed] = useState(false);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(() =>
     getCachedPdfCoverSync(book.id, book.sizeBytes)
   );
 
   const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   const renderedSetRef = useRef<Set<number>>(new Set());
+  const pageOrderRef = useRef<number[]>([]);
   const inFlightSetRef = useRef<Set<number>>(new Set());
   const hiResSetRef = useRef<Set<number>>(new Set());
   const hiResInFlightRef = useRef<Set<number>>(new Set());
   const hiResOrderRef = useRef<number[]>([]);
+  const currentSpreadRef = useRef(0);
+  const keptPageRef = useRef<number | null>(null);
+  const focusPageRef = useRef<number | null>(null);
   const flipTimerRef = useRef<number | null>(null);
   const clickTimerRef = useRef<number | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -115,11 +124,18 @@ export function FlipBookReader({
   const onBookUpdateRef = useRef(onBookUpdate);
   const lastPageTapRef = useRef<{ time: number; x: number; y: number; pageNum: number } | null>(null);
   const suppressClickUntilRef = useRef(0);
+  const spreadSwipeRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     bookRef.current = book;
     onBookUpdateRef.current = onBookUpdate;
   }, [book, onBookUpdate]);
+
+  useEffect(() => {
+    currentSpreadRef.current = currentSpread;
+    keptPageRef.current = getKeptPage(progress);
+    focusPageRef.current = focusAnchor?.pageNum ?? null;
+  }, [currentSpread, progress, focusAnchor]);
 
   const totalLeaves = Math.max(1, Math.ceil(numPages / 2));
 
@@ -143,6 +159,7 @@ export function FlipBookReader({
     setCoverOpened(false);
     setCoverFading(false);
     setCoverSettled(false);
+    setKeeperRevealed(false);
     setCoverPreviewUrl(getCachedPdfCoverSync(book.id, book.sizeBytes));
 
     let cancelled = false;
@@ -203,6 +220,7 @@ export function FlipBookReader({
           lastPage: nextProgress.lastPage,
           totalPages: nextProgress.totalPages,
           bookmarkedPage: nextProgress.bookmarkedPage,
+          keeperColor: nextProgress.keeperColor,
           readingStatus: nextProgress.readingStatus,
           lastReadAt: nextProgress.updatedAt,
         });
@@ -216,6 +234,7 @@ export function FlipBookReader({
             lastPage: nextProgress.lastPage,
             totalPages: nextProgress.totalPages,
             bookmarkedPage: nextProgress.bookmarkedPage,
+            keeperColor: nextProgress.keeperColor,
             readingStatus: nextProgress.readingStatus,
             lastReadAt: nextProgress.updatedAt,
           }),
@@ -264,6 +283,7 @@ export function FlipBookReader({
     setPageErrors({});
     setJumpValue('1');
     renderedSetRef.current = new Set();
+    pageOrderRef.current = [];
     inFlightSetRef.current = new Set();
     hiResSetRef.current = new Set();
     hiResInFlightRef.current = new Set();
@@ -277,6 +297,8 @@ export function FlipBookReader({
       cMapPacked: true,
       standardFontDataUrl: '/pdfjs/standard_fonts/',
       iccUrl: '/pdfjs/iccs/',
+      rangeChunkSize: 65536,
+      disableAutoFetch: true,
     });
 
     loadingTask.promise
@@ -350,8 +372,41 @@ export function FlipBookReader({
       canvas.height = 0;
       outputCanvas.width = 0;
       outputCanvas.height = 0;
+      if (pdfDocRef.current !== doc) return;
+
       renderedSetRef.current.add(pageNum);
-      setPageImages((prev) => ({ ...prev, [pageNum]: dataUrl }));
+      pageOrderRef.current = [...pageOrderRef.current.filter((p) => p !== pageNum), pageNum];
+
+      const evictedPages: number[] = [];
+      if (pageOrderRef.current.length > 24) {
+        const minKeep = currentSpreadRef.current * 2 - 4;
+        const maxKeep = currentSpreadRef.current * 2 + 5;
+        for (let i = 0; i < pageOrderRef.current.length && pageOrderRef.current.length - evictedPages.length > 24; i++) {
+          const candidate = pageOrderRef.current[i];
+          const isProtected =
+            (candidate >= minKeep && candidate <= maxKeep) ||
+            candidate === keptPageRef.current ||
+            candidate === focusPageRef.current;
+          if (!isProtected) {
+            evictedPages.push(candidate);
+          }
+        }
+        if (evictedPages.length > 0) {
+          const evictSet = new Set(evictedPages);
+          pageOrderRef.current = pageOrderRef.current.filter((p) => !evictSet.has(p));
+          for (const p of evictedPages) {
+            renderedSetRef.current.delete(p);
+          }
+        }
+      }
+
+      setPageImages((prev) => {
+        const next = { ...prev, [pageNum]: dataUrl };
+        for (const p of evictedPages) {
+          delete next[p];
+        }
+        return next;
+      });
     } catch (err) {
       const name = err instanceof Error ? err.name : '';
       if (name !== 'RenderingCancelledException') {
@@ -430,6 +485,7 @@ export function FlipBookReader({
       targetPage: number,
       options?: {
         bookmarkedPage?: number | null;
+        keeperColor?: BookKeeperColor | null;
         status?: ReadingStatus;
         immediate?: boolean;
         forceLastPage?: boolean;
@@ -446,6 +502,10 @@ export function FlipBookReader({
           options && 'bookmarkedPage' in options
             ? (options.bookmarkedPage ?? null)
             : prev.bookmarkedPage;
+        const nextKeeperColor =
+          options && 'keeperColor' in options
+            ? (options.keeperColor ?? null)
+            : prev.keeperColor;
         const nextStatus: ReadingStatus =
           options?.status ??
           (prev.readingStatus === 'completed'
@@ -457,6 +517,7 @@ export function FlipBookReader({
           lastPage: nextLastPage,
           totalPages: numPages,
           bookmarkedPage: nextBookmark,
+          keeperColor: nextKeeperColor,
           readingStatus: nextStatus,
           updatedAt: now,
         };
@@ -507,11 +568,41 @@ export function FlipBookReader({
 
   useEffect(() => {
     if (numPages === 0) return;
-    const minPage = Math.max(1, currentSpread * 2 - 3);
-    const maxPage = Math.min(numPages, currentSpread * 2 + 6);
-    for (let p = minPage; p <= maxPage; p++) {
-      void renderPdfPage(p);
+    let cancelled = false;
+    const primary: number[] = [];
+    if (currentSpread === 0) {
+      primary.push(1);
+    } else {
+      primary.push(currentSpread * 2, currentSpread * 2 + 1);
     }
+    const ordered: number[] = [];
+    const seen = new Set<number>();
+    const pushIfValid = (p: number) => {
+      if (p >= 1 && p <= numPages && !seen.has(p)) {
+        seen.add(p);
+        ordered.push(p);
+      }
+    };
+    for (const p of primary) pushIfValid(p);
+    for (let offset = 1; offset <= 4; offset++) {
+      pushIfValid(currentSpread * 2 + 1 + offset);
+      pushIfValid(currentSpread * 2 - offset);
+    }
+
+    let cursor = 0;
+    const workerCount = 2;
+    const runWorker = async () => {
+      while (!cancelled && cursor < ordered.length) {
+        const nextPage = ordered[cursor++];
+        await renderPdfPage(nextPage);
+      }
+    };
+    for (let w = 0; w < workerCount; w++) {
+      void runWorker();
+    }
+    return () => {
+      cancelled = true;
+    };
   }, [numPages, currentSpread, renderPdfPage]);
 
   const primarySpreadPage =
@@ -520,6 +611,25 @@ export function FlipBookReader({
         ? 1
         : Math.min(numPages, currentSpread * 2)
       : 1;
+
+  const activeKeeperColor = resolveBookKeeperColor(book.id, progress.keeperColor);
+
+  const selectKeeperColorAtPage = useCallback(
+    (nextColor: BookKeeperColor, pageNum: number) => {
+      if (numPages <= 0) return;
+      const clampedPage = Math.max(1, Math.min(numPages, pageNum));
+      hasInteractedRef.current = true;
+      const currentKept = getKeptPage(progress);
+      const targetBookmark = currentKept ?? clampedPage;
+      commitPageProgress(targetBookmark, {
+        bookmarkedPage: targetBookmark,
+        keeperColor: nextColor,
+        status: progress.readingStatus === 'completed' ? 'completed' : 'reading',
+        immediate: true,
+      });
+    },
+    [commitPageProgress, numPages, progress]
+  );
 
   const toggleBookKeeperAtPage = useCallback(
     (pageNum: number) => {
@@ -545,13 +655,14 @@ export function FlipBookReader({
       } else {
         commitPageProgress(clampedPage, {
           bookmarkedPage: clampedPage,
+          keeperColor: activeKeeperColor,
           status: progress.readingStatus === 'completed' ? 'completed' : 'reading',
           immediate: true,
           forceLastPage: true,
         });
       }
     },
-    [commitPageProgress, currentSpread, numPages, primarySpreadPage, progress]
+    [activeKeeperColor, commitPageProgress, currentSpread, numPages, primarySpreadPage, progress]
   );
 
   useEffect(() => {
@@ -645,6 +756,21 @@ export function FlipBookReader({
   const displayKeptOnLeft = displayKeptPage !== null && zoomedLeftPage === displayKeptPage;
   const displayKeptOnRight = displayKeptPage !== null && zoomedRightPage === displayKeptPage;
 
+  const pageIsOpen = singleZoom
+    ? stageArrived && !loadingDoc && !docError
+    : coverFading && activeFlipLeaf === null && !loadingDoc && !docError;
+
+  useEffect(() => {
+    setKeeperRevealed(false);
+    if (!pageIsOpen || displayKeptPage === null || closing) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setKeeperRevealed(true);
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [pageIsOpen, displayKeptPage, currentSpread, closing]);
+
   const renderPageContent = (pageNum: number, emptyLabel: string) => {
     if (pageNum > numPages) {
       return (
@@ -696,8 +822,8 @@ export function FlipBookReader({
           <p className="mt-1 text-sm text-white/80">{docError}</p>
         </div>
       ) : singleZoom ? (
-        <div className="w-[min(92vw,900px)] h-[min(78vh,690px)] bg-[#141210] rounded-xl p-3 shadow-2xl flex flex-col">
-          <div className="flex-1 overflow-y-auto bg-[#e9e5dc] rounded p-4 space-y-4">
+        <div className="w-[min(94vw,900px)] h-[min(64dvh,690px)] sm:w-[min(92vw,900px)] sm:h-[min(78dvh,690px)] bg-[#141210] rounded-xl p-2 sm:p-3 shadow-2xl flex flex-col">
+          <div className="flex-1 overflow-y-auto bg-[#e9e5dc] rounded p-2.5 sm:p-4 space-y-3 sm:space-y-4">
             {zoomedLeftPage ? (
               <div
                 className="relative bg-white shadow mx-auto max-w-2xl cursor-zoom-in"
@@ -708,19 +834,24 @@ export function FlipBookReader({
                 }}
                 onPointerUp={(e) => handlePageTapPointerUp(zoomedLeftPage, e)}
               >
-                {displayKeptOnLeft && displayKeptPage !== null ? (
+                {keeperRevealed && displayKeptOnLeft && displayKeptPage !== null ? (
                   <button
                     key={`zoom-keeper-${displayKeptPage}`}
                     type="button"
+                    onDoubleClick={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleBookKeeperAtPage(displayKeptPage);
                     }}
-                    title={`Book Keeper at Page ${displayKeptPage} — click to toggle`}
+                    style={getBookKeeperRibbonStyle(activeKeeperColor)}
+                    title={`${BOOK_KEEPER_PALETTE[activeKeeperColor].label} Book Keeper at Page ${displayKeptPage} — click to toggle`}
                     aria-label={`Bookmark at Page ${displayKeptPage}`}
-                    className="reader-book-keeper-ribbon absolute top-0 left-5 z-20 flex flex-col items-center justify-end cursor-pointer"
+                    className="reader-book-keeper-ribbon is-compact absolute top-0 left-4 z-20 flex flex-col items-center justify-end cursor-pointer"
                   >
-                    <span className="text-[9px] font-mono font-bold tabular-nums text-[#fff5f5] leading-none">
+                    <span
+                      style={{ color: BOOK_KEEPER_PALETTE[activeKeeperColor].text }}
+                      className="text-[8px] font-mono font-bold tabular-nums leading-none"
+                    >
                       p.{displayKeptPage}
                     </span>
                   </button>
@@ -749,19 +880,24 @@ export function FlipBookReader({
                 }}
                 onPointerUp={(e) => handlePageTapPointerUp(zoomedRightPage, e)}
               >
-                {displayKeptOnRight && displayKeptPage !== null ? (
+                {keeperRevealed && displayKeptOnRight && displayKeptPage !== null ? (
                   <button
                     key={`zoom-keeper-${displayKeptPage}`}
                     type="button"
+                    onDoubleClick={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleBookKeeperAtPage(displayKeptPage);
                     }}
-                    title={`Book Keeper at Page ${displayKeptPage} — click to toggle`}
+                    style={getBookKeeperRibbonStyle(activeKeeperColor)}
+                    title={`${BOOK_KEEPER_PALETTE[activeKeeperColor].label} Book Keeper at Page ${displayKeptPage} — click to toggle`}
                     aria-label={`Bookmark at Page ${displayKeptPage}`}
-                    className="reader-book-keeper-ribbon absolute top-0 right-5 z-20 flex flex-col items-center justify-end cursor-pointer"
+                    className="reader-book-keeper-ribbon is-compact absolute top-0 right-4 z-20 flex flex-col items-center justify-end cursor-pointer"
                   >
-                    <span className="text-[9px] font-mono font-bold tabular-nums text-[#fff5f5] leading-none">
+                    <span
+                      style={{ color: BOOK_KEEPER_PALETTE[activeKeeperColor].text }}
+                      className="text-[8px] font-mono font-bold tabular-nums leading-none"
+                    >
                       p.{displayKeptPage}
                     </span>
                   </button>
@@ -783,24 +919,50 @@ export function FlipBookReader({
           </div>
         </div>
       ) : (
-        <div className={`bookWrapper ${coverOpened ? 'is-spread-open' : ''}`}>
+        <div
+          className={`bookWrapper ${coverOpened ? 'is-spread-open' : ''}`}
+          onTouchStart={(e) => {
+            if (e.touches.length === 1) {
+              spreadSwipeRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            } else {
+              spreadSwipeRef.current = null;
+            }
+          }}
+          onTouchEnd={(e) => {
+            const start = spreadSwipeRef.current;
+            spreadSwipeRef.current = null;
+            if (!start || e.changedTouches.length !== 1) return;
+            const dx = e.changedTouches[0].clientX - start.x;
+            const dy = e.changedTouches[0].clientY - start.y;
+            if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.35) {
+              suppressClickUntilRef.current = performance.now() + 360;
+              if (dx < 0) {
+                turnNext();
+              } else {
+                turnPrev();
+              }
+            }
+          }}
+        >
           <div className="bookBg">
             <div className="bookBoardLeft" aria-hidden="true" />
             <div className="bookBoardRight" aria-hidden="true" />
             <div className="pageBg">
               <div className="baseLeft">
-                <div className="w-full h-full flex flex-col items-center justify-center p-6 sm:p-10 text-center">
-                  <p className="text-[11px] font-mono uppercase tracking-widest text-[#78716C]">
+                <div className="w-full h-full flex flex-col items-center justify-center p-3 sm:p-10 text-center">
+                  <p className="text-[9px] sm:text-[11px] font-mono uppercase tracking-widest text-[#78716C]">
                     Folio Edition
                   </p>
-                  <h3 className="mt-3 font-serif text-xl sm:text-2xl font-medium text-[#1A1816] max-w-xs [text-wrap:balance]">
+                  <h3 className="mt-1.5 sm:mt-3 font-serif text-sm sm:text-2xl font-medium text-[#1A1816] max-w-xs line-clamp-3 [text-wrap:balance]">
                     {book.title}
                   </h3>
-                  <p className="mt-2 text-xs sm:text-sm text-[#57534E]">{book.author}</p>
-                  <div className="mt-6 pt-4 border-t border-[#E5E0D5] text-xs font-mono tabular-nums text-[#78716C]">
+                  <p className="mt-1 sm:mt-2 text-[11px] sm:text-sm text-[#57534E] line-clamp-1 max-w-full">
+                    {book.author}
+                  </p>
+                  <div className="mt-3 sm:mt-6 pt-2 sm:pt-4 border-t border-[#E5E0D5] text-[10px] sm:text-xs font-mono tabular-nums text-[#78716C]">
                     {numPages > 0 ? `${numPages} Pages` : 'Loading...'}
                   </div>
-                  <p className="mt-4 text-[11px] text-[#78716C]">
+                  <p className="mt-2 sm:mt-4 text-[10px] sm:text-[11px] text-[#78716C] hidden sm:block">
                     Click the right page to turn forward
                   </p>
                 </div>
@@ -906,9 +1068,9 @@ export function FlipBookReader({
                     }`}
                   >
                     <div className="pageFace front cover-sheen bg-[#22252d] flex items-center justify-center border-l border-black/40 rounded-r-[10px]">
-                      {coverPreviewUrl || pageImages[1] ? (
+                      {book.coverPath || coverPreviewUrl || pageImages[1] ? (
                         <img
-                          src={pageImages[1] || coverPreviewUrl || ''}
+                          src={book.coverPath || coverPreviewUrl || pageImages[1] || ''}
                           alt=""
                           className="w-full h-full object-cover object-top"
                         />
@@ -922,22 +1084,26 @@ export function FlipBookReader({
                 ) : null}
               </div>
 
-              {coverOpened && displayKeptPage !== null && (displayKeptOnLeft || displayKeptOnRight) ? (
+              {keeperRevealed && displayKeptPage !== null && (displayKeptOnLeft || displayKeptOnRight) ? (
                 <button
                   key={`spread-keeper-${displayKeptPage}-${displayKeptOnLeft ? 'L' : 'R'}`}
                   type="button"
                   onClick={() => toggleBookKeeperAtPage(displayKeptPage)}
+                  style={getBookKeeperRibbonStyle(activeKeeperColor)}
                   title={
                     keptPage === displayKeptPage
-                      ? `Book Keeper at Page ${displayKeptPage} — click to remove`
-                      : `Place Book Keeper at Page ${displayKeptPage}`
+                      ? `${BOOK_KEEPER_PALETTE[activeKeeperColor].label} Book Keeper at Page ${displayKeptPage} — click to remove`
+                      : `Place ${BOOK_KEEPER_PALETTE[activeKeeperColor].label} Book Keeper at Page ${displayKeptPage}`
                   }
-                  aria-label={`Toggle red bookmark at Page ${displayKeptPage}`}
+                  aria-label={`Toggle Book Keeper at Page ${displayKeptPage}`}
                   className={`reader-book-keeper-ribbon absolute -top-2 z-[120] flex flex-col items-center justify-end cursor-pointer ${
                     displayKeptOnLeft ? 'left-[10%]' : 'right-[10%]'
                   }`}
                 >
-                  <span className="text-[9px] font-mono font-bold tabular-nums text-[#fff5f5] leading-none">
+                  <span
+                    style={{ color: BOOK_KEEPER_PALETTE[activeKeeperColor].text }}
+                    className="text-[9px] font-mono font-bold tabular-nums leading-none"
+                  >
                     p.{displayKeptPage}
                   </span>
                 </button>
@@ -949,33 +1115,35 @@ export function FlipBookReader({
 
       {!docError && numPages > 0 ? (
         <div
-          className={`mt-4 flex flex-wrap items-center justify-between gap-3 w-[min(92vw,1080px)] text-xs text-white/85 transition-opacity duration-500 ${
+          className={`mt-3 sm:mt-4 flex flex-wrap items-center justify-center sm:justify-between gap-2 sm:gap-3 w-[min(94vw,1080px)] sm:w-[min(92vw,1080px)] text-xs text-white/85 transition-opacity duration-500 ${
             coverOpened ? 'opacity-100' : 'opacity-0 pointer-events-none'
           }`}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <button
               type="button"
               disabled={currentSpread <= 0}
               onClick={turnPrev}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-black/45 hover:bg-black/70 border border-white/10 disabled:opacity-35 backdrop-blur-md transition-colors whitespace-nowrap"
+              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-md bg-black/45 hover:bg-black/70 border border-white/10 disabled:opacity-35 backdrop-blur-md transition-colors whitespace-nowrap cursor-pointer"
             >
               <ChevronLeft className="w-4 h-4" />
-              Previous Page
+              <span className="sm:hidden">Prev</span>
+              <span className="hidden sm:inline">Previous Page</span>
             </button>
             <button
               type="button"
               disabled={currentSpread >= totalLeaves}
               onClick={turnNext}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-black/45 hover:bg-black/70 border border-white/10 disabled:opacity-35 backdrop-blur-md transition-colors whitespace-nowrap"
+              className="inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-md bg-black/45 hover:bg-black/70 border border-white/10 disabled:opacity-35 backdrop-blur-md transition-colors whitespace-nowrap cursor-pointer"
             >
-              Next Page
+              <span className="sm:hidden">Next</span>
+              <span className="hidden sm:inline">Next Page</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
-          <form onSubmit={handleJumpSubmit} className="flex items-center gap-2">
-            <label htmlFor="flipbook-page-input" className="text-white/75">
+          <form onSubmit={handleJumpSubmit} className="flex items-center gap-1.5 sm:gap-2">
+            <label htmlFor="flipbook-page-input" className="text-white/75 hidden sm:inline">
               Page
             </label>
             <input
@@ -985,30 +1153,42 @@ export function FlipBookReader({
               max={numPages}
               value={jumpValue}
               onChange={(e) => setJumpValue(e.target.value)}
-              className="w-16 rounded-md bg-black/45 border border-white/15 px-2 py-1 text-center font-mono tabular-nums text-white focus:outline-none focus:border-[#f3c677]"
+              className="w-12 sm:w-16 rounded-md bg-black/45 border border-white/15 px-1.5 sm:px-2 py-1 text-center font-mono tabular-nums text-white focus:outline-none focus:border-[#f3c677]"
             />
-            <span className="font-mono tabular-nums text-white/75">of {numPages}</span>
+            <span className="font-mono tabular-nums text-white/75">/ {numPages}</span>
             <button
               type="submit"
-              className="px-2.5 py-1 rounded-md bg-black/45 hover:bg-black/70 border border-white/10 text-white font-medium transition-colors"
+              className="px-2 sm:px-2.5 py-1 rounded-md bg-black/45 hover:bg-black/70 border border-white/10 text-white font-medium transition-colors cursor-pointer"
             >
               Go
             </button>
           </form>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
             <button
               type="button"
               onClick={() => toggleBookKeeperAtPage(primarySpreadPage)}
+              style={
+                keptOnCurrentSpread
+                  ? {
+                      backgroundColor: BOOK_KEEPER_PALETTE[activeKeeperColor].buttonBg,
+                      borderColor: BOOK_KEEPER_PALETTE[activeKeeperColor].buttonBorder,
+                      color: '#ffffff',
+                      boxShadow: BOOK_KEEPER_PALETTE[activeKeeperColor].glow,
+                    }
+                  : {
+                      color: BOOK_KEEPER_PALETTE[activeKeeperColor].buttonMutedText,
+                    }
+              }
               title={
                 keptOnCurrentSpread && keptPage !== null
                   ? `Book Keeper active at Page ${keptPage} — click to clear`
-                  : `Place red Book Keeper label on Page ${primarySpreadPage}`
+                  : `Place ${BOOK_KEEPER_PALETTE[activeKeeperColor].label} Book Keeper on Page ${primarySpreadPage}`
               }
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border backdrop-blur-md transition-colors whitespace-nowrap cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-md border backdrop-blur-md transition-colors whitespace-nowrap cursor-pointer ${
                 keptOnCurrentSpread
-                  ? 'bg-[#b91c1c] hover:bg-[#dc2626] border-[#fca5a5]/40 text-white shadow-[0_6px_18px_rgba(185,28,28,0.45)]'
-                  : 'bg-black/45 hover:bg-[#b91c1c]/85 border-white/10 hover:border-[#fca5a5]/35 text-[#fca5a5] hover:text-white'
+                  ? ''
+                  : 'bg-black/45 hover:bg-black/70 border-white/10 hover:text-white'
               }`}
             >
               <Bookmark
@@ -1022,6 +1202,33 @@ export function FlipBookReader({
               </span>
             </button>
 
+            <div
+              role="group"
+              aria-label="Book Keeper ribbon color"
+              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black/45 border border-white/10 backdrop-blur-md"
+            >
+              {BOOK_KEEPER_COLORS.map((c) => {
+                const entry = BOOK_KEEPER_PALETTE[c];
+                const active = activeKeeperColor === c;
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => selectKeeperColorAtPage(c, primarySpreadPage)}
+                    title={`${entry.label} Book Keeper`}
+                    aria-label={`Use ${entry.label} Book Keeper`}
+                    aria-pressed={active}
+                    style={{ backgroundColor: entry.swatch }}
+                    className={`w-3.5 h-3.5 rounded-full transition-transform cursor-pointer ${
+                      active
+                        ? 'ring-2 ring-white ring-offset-1 ring-offset-black/70 scale-110'
+                        : 'opacity-75 hover:opacity-100 hover:scale-110'
+                    }`}
+                  />
+                );
+              })}
+            </div>
+
             {keptPage !== null && !keptOnCurrentSpread ? (
               <button
                 type="button"
@@ -1030,8 +1237,13 @@ export function FlipBookReader({
                   setActiveFlipLeaf(null);
                   setCurrentSpread(Math.floor(clamped / 2));
                 }}
+                style={{
+                  backgroundColor: BOOK_KEEPER_PALETTE[activeKeeperColor].jumpBg,
+                  borderColor: BOOK_KEEPER_PALETTE[activeKeeperColor].buttonBorder,
+                  color: BOOK_KEEPER_PALETTE[activeKeeperColor].jumpText,
+                }}
                 title={`Jump to bookmarked Page ${keptPage}`}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#7f1d1d]/75 hover:bg-[#991b1b] border border-[#fca5a5]/25 text-[#fecaca] font-mono tabular-nums transition-colors whitespace-nowrap cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border font-mono tabular-nums transition-opacity hover:opacity-90 whitespace-nowrap cursor-pointer"
               >
                 Go p.{keptPage}
               </button>
@@ -1040,17 +1252,19 @@ export function FlipBookReader({
             <button
               type="button"
               onClick={() => setSingleZoom((prev) => !prev)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-black/45 hover:bg-black/70 border border-white/10 backdrop-blur-md transition-colors whitespace-nowrap cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-md bg-black/45 hover:bg-black/70 border border-white/10 backdrop-blur-md transition-colors whitespace-nowrap cursor-pointer"
             >
               {singleZoom ? (
                 <>
                   <Minimize2 className="w-3.5 h-3.5" />
-                  3D Spread View
+                  <span className="sm:hidden">3D Book</span>
+                  <span className="hidden sm:inline">3D Spread View</span>
                 </>
               ) : (
                 <>
                   <Maximize2 className="w-3.5 h-3.5" />
-                  Zoom Single Pages
+                  <span className="sm:hidden">Single Page</span>
+                  <span className="hidden sm:inline">Zoom Single Pages</span>
                 </>
               )}
             </button>
@@ -1066,7 +1280,9 @@ export function FlipBookReader({
           hiResImages={hiResImages}
           pageErrors={pageErrors}
           keptPage={displayKeptPage ?? keptPage}
+          keeperColor={activeKeeperColor}
           onToggleBookmark={(pageNum) => toggleBookKeeperAtPage(pageNum)}
+          onSelectKeeperColor={(color, pageNum) => selectKeeperColorAtPage(color, pageNum)}
           onRequestHiRes={(pageNum) => {
             void renderPdfPage(pageNum);
             void renderHiResPage(pageNum);

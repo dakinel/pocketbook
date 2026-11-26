@@ -2,6 +2,14 @@ export type RightsCategory = 'public_domain' | 'controlled_lending';
 
 export type ReadingStatus = 'unread' | 'reading' | 'completed';
 
+export type BookKeeperColor =
+  | 'crimson'
+  | 'emerald'
+  | 'sapphire'
+  | 'amber'
+  | 'violet'
+  | 'teal';
+
 export interface RequestedBookSpec {
   bookKey: string;
   accessionCode: string;
@@ -87,5 +95,6 @@ export interface VaultBook {
   lastPage?: number | null;
   totalPages?: number | null;
   bookmarkedPage?: number | null;
+  keeperColor?: BookKeeperColor | null;
   lastReadAt?: string | null;
 }

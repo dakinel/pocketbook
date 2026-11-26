@@ -128,7 +128,7 @@ export function PdfReaderModal({
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 transition-all duration-500 ${
+      className={`fixed inset-0 h-dvh z-50 flex items-center justify-center px-2.5 pt-14 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-6 transition-all duration-500 ${
         backdropVisible ? 'bg-[#091214]/90 opacity-100' : 'bg-[#091214]/0 opacity-0'
       }`}
       role="dialog"
@@ -150,7 +150,7 @@ export function PdfReaderModal({
             'radial-gradient(ellipse 60% 56% at 50% 48%, rgba(143, 224, 207, 0.12), transparent 70%)',
         }}
       />
-      <div className="fixed top-4 right-4 sm:top-5 sm:right-6 z-30 flex items-center gap-2">
+      <div className="fixed top-[max(0.75rem,env(safe-area-inset-top))] right-3 sm:top-5 sm:right-6 z-30 flex items-center gap-2">
         <button
           type="button"
           onClick={() => setShowNotes((prev) => !prev)}
@@ -194,7 +194,7 @@ export function PdfReaderModal({
 
       {showNotes ? (
         <aside
-          className="fixed top-16 right-4 sm:right-6 bottom-6 z-40 w-[min(92vw,360px)] flex flex-col bg-[#F8F6F1] text-[#1A1816] border border-[#DFD9CE] rounded-lg p-5 shadow-2xl overflow-y-auto"
+          className="fixed top-14 left-3 right-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] sm:top-16 sm:left-auto sm:right-6 sm:bottom-6 sm:w-[360px] z-40 flex flex-col bg-[#F8F6F1] text-[#1A1816] border border-[#DFD9CE] rounded-lg p-4 sm:p-5 shadow-2xl overflow-y-auto"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="pb-3 border-b border-[#E7E2D8]">
@@ -245,7 +245,7 @@ export function PdfReaderModal({
                 setSavedNotice(false);
               }}
               placeholder="Record page citations, investing principles, or chapter summaries..."
-              className="mt-2 flex-1 min-h-[200px] w-full resize-none rounded-md border border-[#DFD9CE] bg-white p-3 text-sm leading-relaxed text-[#1A1816] placeholder:text-[#A8A29E] focus:outline-none focus:border-[#14532D]"
+              className="mt-2 flex-1 min-h-[140px] sm:min-h-[200px] w-full resize-none rounded-md border border-[#DFD9CE] bg-white p-3 text-sm leading-relaxed text-[#1A1816] placeholder:text-[#A8A29E] focus:outline-none focus:border-[#14532D]"
             />
           </div>
 

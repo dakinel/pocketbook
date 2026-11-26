@@ -272,9 +272,18 @@ function detectSoftwareWebGL(): boolean {
   }
 }
 
-export function FloatingBooksBackground() {
+export function FloatingBooksBackground({ paused = false }: { paused?: boolean } = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const pausedRef = useRef(paused);
+  const resumeLoopRef = useRef<(() => void) | null>(null);
   const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    pausedRef.current = paused;
+    if (!paused) {
+      resumeLoopRef.current?.();
+    }
+  }, [paused]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -700,6 +709,8 @@ export function FloatingBooksBackground() {
     let disposed = false;
     let contextLost = false;
     let frameId = 0;
+    let loopActive = false;
+    let elapsedTime = 0;
 
     const onContextLost = (e: Event) => {
       e.preventDefault();
@@ -708,6 +719,7 @@ export function FloatingBooksBackground() {
     const onContextRestored = () => {
       contextLost = false;
       layout();
+      resumeLoop();
     };
     renderer.domElement.addEventListener('webglcontextlost', onContextLost);
     renderer.domElement.addEventListener('webglcontextrestored', onContextRestored);
@@ -723,7 +735,11 @@ export function FloatingBooksBackground() {
       const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
       gl.flush();
       const poll = () => {
-        if (disposed) return;
+        if (disposed || pausedRef.current || document.hidden) {
+          loopActive = false;
+          if (sync) gl.deleteSync(sync);
+          return;
+        }
         const state = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
         if (state === gl.UNSIGNALED) {
           frameId = window.setTimeout(poll, 5);
@@ -736,9 +752,20 @@ export function FloatingBooksBackground() {
     }
 
     function renderFrame() {
-      if (disposed) return;
+      if (disposed) {
+        loopActive = false;
+        return;
+      }
+      if (pausedRef.current || document.hidden) {
+        loopActive = false;
+        return;
+      }
       if (!contextLost) {
-        const t = reduceMotion ? 0 : clock.getElapsedTime();
+        const dt = Math.min(0.05, clock.getDelta());
+        if (!reduceMotion) {
+          elapsedTime += dt;
+        }
+        const t = reduceMotion ? 0 : elapsedTime;
 
         smooth.x += (mouse.x - smooth.x) * 0.04;
         smooth.y += (mouse.y - smooth.y) * 0.04;
@@ -778,11 +805,30 @@ export function FloatingBooksBackground() {
       }
     }
 
-    renderFrame();
+    function resumeLoop() {
+      if (disposed || loopActive || pausedRef.current || document.hidden) return;
+      loopActive = true;
+      clock.getDelta();
+      renderFrame();
+    }
+
+    resumeLoopRef.current = resumeLoop;
+
+    const onVisibilityChange = () => {
+      if (!document.hidden && !pausedRef.current) {
+        resumeLoop();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    resumeLoop();
     const readyRaf = window.requestAnimationFrame(() => setReady(true));
 
     return () => {
       disposed = true;
+      loopActive = false;
+      resumeLoopRef.current = null;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       window.cancelAnimationFrame(readyRaf);
       window.cancelAnimationFrame(frameId);
       window.clearTimeout(frameId);

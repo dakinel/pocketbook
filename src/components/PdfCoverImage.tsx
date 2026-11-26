@@ -8,6 +8,8 @@ interface PdfCoverImageProps {
   coverPath?: string | null;
   priority?: boolean;
   inView?: boolean;
+  rattleTrigger?: number;
+  onLockedChange?: (locked: boolean) => void;
   className?: string;
 }
 
@@ -225,7 +227,13 @@ function ChainLinksStrand({
   );
 }
 
-function LockedVaultCover({ breaking }: { breaking: boolean }) {
+function LockedVaultCover({
+  breaking,
+  rattling,
+}: {
+  breaking: boolean;
+  rattling: boolean;
+}) {
   const uid = useId().replace(/:/g, '');
   const steelGradId = `chainSteel-${uid}`;
   const edgeGradId = `chainEdge-${uid}`;
@@ -237,7 +245,7 @@ function LockedVaultCover({ breaking }: { breaking: boolean }) {
     <div
       aria-hidden="true"
       className={`absolute inset-0 z-10 pointer-events-none select-none ${
-        breaking ? 'vault-chain-breaking' : ''
+        breaking ? 'vault-chain-breaking' : rattling ? 'vault-chain-rattling' : ''
       }`}
     >
       {/* Clean obsidian cover backing without extra inner borders or boxes */}
@@ -314,7 +322,11 @@ function LockedVaultCover({ breaking }: { breaking: boolean }) {
         })}
 
         {/* Layer 2: Real sculpted steel & brass padlock (no extra box or frame) */}
-        <g className={`vault-locker-group ${breaking ? 'vault-locker-breaking' : ''}`}>
+        <g
+          className={`vault-locker-group ${
+            breaking ? 'vault-locker-breaking' : rattling ? 'vault-locker-rattling' : ''
+          }`}
+        >
           {/* Realistic cast shadow of the padlock onto the book cover */}
           <g transform="translate(3, 7)" opacity="0.6">
             <path
@@ -456,6 +468,8 @@ export function PdfCoverImage({
   coverPath,
   priority = false,
   inView = true,
+  rattleTrigger = 0,
+  onLockedChange,
   className = '',
 }: PdfCoverImageProps) {
   const serverCoverUrl = `/api/vault/${encodeURIComponent(bookId)}/cover?v=5-${sizeBytes}`;
@@ -488,7 +502,28 @@ export function PdfCoverImage({
     Boolean(activeSrc && loadedCoverUrls.has(activeSrc))
   );
   const [breaking, setBreaking] = useState(false);
+  const [rattling, setRattling] = useState(false);
   const wasReadyRef = useRef(imageReady);
+
+  useEffect(() => {
+    onLockedChange?.(!imageReady);
+  }, [imageReady, onLockedChange]);
+
+  useEffect(() => {
+    if (!rattleTrigger || imageReady || breaking) return;
+    setHasEnteredView(true);
+    setRattling(false);
+    const raf = window.requestAnimationFrame(() => {
+      setRattling(true);
+    });
+    const timer = window.setTimeout(() => {
+      setRattling(false);
+    }, 460);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, [rattleTrigger, imageReady, breaking]);
 
   useEffect(() => {
     const cached = getCachedPdfCoverSync(bookId, sizeBytes);
@@ -506,6 +541,7 @@ export function PdfCoverImage({
     const alreadyLoaded = Boolean(initialSrc && loadedCoverUrls.has(initialSrc));
     setImageReady(alreadyLoaded);
     setBreaking(false);
+    setRattling(false);
     wasReadyRef.current = alreadyLoaded;
   }, [bookId, sizeBytes, coverPath, hasValidAssetCoverProp, serverCoverUrl]);
 
@@ -593,7 +629,9 @@ export function PdfCoverImage({
           }`}
         />
       ) : null}
-      {!imageReady || breaking ? <LockedVaultCover breaking={breaking} /> : null}
+      {!imageReady || breaking ? (
+        <LockedVaultCover breaking={breaking} rattling={rattling && !breaking} />
+      ) : null}
     </div>
   );
 }

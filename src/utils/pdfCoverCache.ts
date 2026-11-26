@@ -78,9 +78,9 @@ async function writeToDb(key: string, value: string): Promise<void> {
   });
 }
 
-function isCanvasBlankOrStampOnly(canvas: HTMLCanvasElement): boolean {
+function analyzeCoverCanvas(canvas: HTMLCanvasElement): { isRichCover: boolean; hasInk: boolean } {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return false;
+  if (!ctx) return { isRichCover: true, hasInk: true };
   const { width, height } = canvas;
   const sample = ctx.getImageData(0, 0, width, height).data;
   let nonWhitePixels = 0;
@@ -100,12 +100,12 @@ function isCanvasBlankOrStampOnly(canvas: HTMLCanvasElement): boolean {
       }
     }
   }
-  if (totalSampled === 0) return false;
+  if (totalSampled === 0) return { isRichCover: true, hasInk: true };
   const inkRatio = nonWhitePixels / totalSampled;
   const colorRatio = colorPixels / totalSampled;
-  if (inkRatio < 0.025) return true;
-  if (inkRatio < 0.14 && colorRatio < 0.004) return true;
-  return false;
+  const hasInk = inkRatio >= 0.008;
+  const isRichCover = inkRatio >= 0.025 && !(inkRatio < 0.14 && colorRatio < 0.004);
+  return { isRichCover, hasInk };
 }
 
 async function isBoilerplateFrontPage(page: pdfjsLib.PDFPageProxy): Promise<boolean> {
@@ -141,6 +141,7 @@ async function renderCoverFromPdf(bookId: string): Promise<string> {
     const doc = await loadingTask.promise;
     const maxCheck = Math.min(doc.numPages, 7);
     let chosenDataUrl = '';
+    let fallbackDataUrl = '';
 
     for (let pageNum = 1; pageNum <= maxCheck; pageNum++) {
       const page = await doc.getPage(pageNum);
@@ -170,24 +171,30 @@ async function renderCoverFromPdf(bookId: string): Promise<string> {
       }
 
       const finalCanvas = outCtx ? outputCanvas : canvas;
-      const isBlankOrStamp = isCanvasBlankOrStampOnly(finalCanvas);
-      const dataUrl = isBlankOrStamp ? '' : finalCanvas.toDataURL('image/jpeg', 0.84);
+      const { isRichCover, hasInk } = analyzeCoverCanvas(finalCanvas);
+      const dataUrl = isRichCover || (hasInk && !fallbackDataUrl)
+        ? finalCanvas.toDataURL('image/jpeg', 0.84)
+        : '';
 
       canvas.width = 0;
       canvas.height = 0;
       outputCanvas.width = 0;
       outputCanvas.height = 0;
 
-      if (dataUrl) {
+      if (isRichCover && dataUrl) {
         chosenDataUrl = dataUrl;
         break;
       }
+      if (hasInk && dataUrl && !fallbackDataUrl) {
+        fallbackDataUrl = dataUrl;
+      }
     }
 
-    if (!chosenDataUrl) {
+    const result = chosenDataUrl || fallbackDataUrl;
+    if (!result) {
       throw new Error('No visual cover page available.');
     }
-    return chosenDataUrl;
+    return result;
   } finally {
     void loadingTask.destroy();
   }

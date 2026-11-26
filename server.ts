@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import express, { type Request, type Response } from 'express';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -13,6 +14,7 @@ import type {
   ArchiveInspection,
   ArchivePdfFile,
   ArchiveSearchHit,
+  BookKeeperColor,
   ReadingStatus,
   RequestedBookSpec,
   SwingTradeEbook,
@@ -321,20 +323,53 @@ interface BookOverride {
   lastPage?: number | null;
   totalPages?: number | null;
   bookmarkedPage?: number | null;
+  keeperColor?: BookKeeperColor | null;
   lastReadAt?: string | null;
 }
 
+interface CachedBookList {
+  mtimeMs: number;
+  size: number;
+  items: VaultBook[];
+}
+
+const bookListCache = new Map<string, CachedBookList>();
+let overridesCache: { mtimeMs: number; size: number; data: Record<string, BookOverride> } | null = null;
+
+function hasValidRemoteSourceUrl(sourceUrl: unknown): sourceUrl is string {
+  if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) return false;
+  try {
+    validateRemoteHttpsUrl(sourceUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readBookListFromFile(catalogFilePath: string, filesDir: string): VaultBook[] {
-  if (!fs.existsSync(catalogFilePath)) {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(catalogFilePath);
+  } catch {
+    bookListCache.delete(catalogFilePath);
     return [];
   }
+
+  const cached = bookListCache.get(catalogFilePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.items;
+  }
+
   try {
     const raw = fs.readFileSync(catalogFilePath, 'utf8');
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is VaultBook => {
+    const items = parsed.filter((item): item is VaultBook => {
       if (!item || typeof item.id !== 'string' || typeof item.storedFilename !== 'string') {
         return false;
+      }
+      if (hasValidRemoteSourceUrl(item.sourceUrl)) {
+        return true;
       }
       try {
         const filePath = resolvePdfPathInDir(filesDir, item.storedFilename);
@@ -343,6 +378,8 @@ function readBookListFromFile(catalogFilePath: string, filesDir: string): VaultB
         return false;
       }
     });
+    bookListCache.set(catalogFilePath, { mtimeMs: stat.mtimeMs, size: stat.size, items });
+    return items;
   } catch {
     return [];
   }
@@ -357,16 +394,27 @@ function readRepoLibrary(): VaultBook[] {
 }
 
 function readOverrides(): Record<string, BookOverride> {
-  if (!fs.existsSync(OVERRIDES_PATH)) {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(OVERRIDES_PATH);
+  } catch {
+    overridesCache = null;
     return {};
   }
+
+  if (overridesCache && overridesCache.mtimeMs === stat.mtimeMs && overridesCache.size === stat.size) {
+    return overridesCache.data;
+  }
+
   try {
     const raw = fs.readFileSync(OVERRIDES_PATH, 'utf8');
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return {};
     }
-    return parsed as Record<string, BookOverride>;
+    const data = parsed as Record<string, BookOverride>;
+    overridesCache = { mtimeMs: stat.mtimeMs, size: stat.size, data };
+    return data;
   } catch {
     return {};
   }
@@ -376,6 +424,7 @@ function writeOverrides(overrides: Record<string, BookOverride>): void {
   const tempPath = `${OVERRIDES_PATH}.${crypto.randomUUID()}.tmp`;
   fs.writeFileSync(tempPath, JSON.stringify(overrides, null, 2), 'utf8');
   fs.renameSync(tempPath, OVERRIDES_PATH);
+  overridesCache = null;
 }
 
 function applyOverride(book: VaultBook, override?: BookOverride): VaultBook {
@@ -387,6 +436,7 @@ function applyOverride(book: VaultBook, override?: BookOverride): VaultBook {
     ...(override.lastPage !== undefined ? { lastPage: override.lastPage } : {}),
     ...(override.totalPages !== undefined ? { totalPages: override.totalPages } : {}),
     ...(override.bookmarkedPage !== undefined ? { bookmarkedPage: override.bookmarkedPage } : {}),
+    ...(override.keeperColor !== undefined ? { keeperColor: override.keeperColor } : {}),
     ...(override.lastReadAt !== undefined ? { lastReadAt: override.lastReadAt } : {}),
   };
 }
@@ -412,6 +462,7 @@ function writeCatalog(items: VaultBook[]): void {
   const tempPath = `${CATALOG_PATH}.${crypto.randomUUID()}.tmp`;
   fs.writeFileSync(tempPath, JSON.stringify(items, null, 2), 'utf8');
   fs.renameSync(tempPath, CATALOG_PATH);
+  bookListCache.delete(CATALOG_PATH);
 }
 
 let catalogLock: Promise<void> = Promise.resolve();
@@ -440,13 +491,26 @@ function mutateOverrides(
   return next;
 }
 
-async function fetchAllowlisted(rawUrl: string, maxRedirects = 5): Promise<globalThis.Response> {
+interface FetchAllowlistedOptions {
+  method?: 'GET' | 'HEAD';
+  extraHeaders?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+async function fetchAllowlisted(
+  rawUrl: string,
+  maxRedirects = 5,
+  options?: FetchAllowlistedOptions
+): Promise<globalThis.Response> {
   let parsed = validateRemoteHttpsUrl(rawUrl);
   let currentUrl = parsed.toString();
+  const method = options?.method || 'GET';
+
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const isInfobooks =
       parsed.hostname === 'infobooks.org' || parsed.hostname.endsWith('.infobooks.org');
     const headers: Record<string, string> = {
+      ...(options?.extraHeaders || {}),
       'User-Agent': isInfobooks
         ? 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
         : 'FolioVault/1.0 (Personal Digital Library)',
@@ -455,10 +519,13 @@ async function fetchAllowlisted(rawUrl: string, maxRedirects = 5): Promise<globa
       headers['Referer'] = 'https://infobooks.org/';
     }
     const res = await fetch(currentUrl, {
+      method,
       redirect: 'manual',
       headers,
+      signal: options?.signal,
     });
     if (res.status >= 300 && res.status < 400) {
+      void res.body?.cancel().catch(() => {});
       const location = res.headers.get('location');
       if (!location) {
         throw new Error('Redirect response missing Location header.');
@@ -471,6 +538,55 @@ async function fetchAllowlisted(rawUrl: string, maxRedirects = 5): Promise<globa
     return res;
   }
   throw new Error('Too many redirects while fetching archive resource.');
+}
+
+async function probeRemotePdfSource(
+  pdfUrl: string
+): Promise<{ ok: boolean; status: number; sizeBytes: number; isPdf: boolean }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetchAllowlisted(pdfUrl, 5, {
+      method: 'GET',
+      extraHeaders: { Range: 'bytes=0-1023' },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      void res.body?.cancel().catch(() => {});
+      return { ok: false, status: res.status, sizeBytes: 0, isPdf: false };
+    }
+
+    let sizeBytes = 0;
+    const contentRange = res.headers.get('content-range');
+    if (contentRange) {
+      const match = contentRange.match(/\/(\d+)\s*$/);
+      if (match) {
+        sizeBytes = Number(match[1]) || 0;
+      }
+    }
+    if (!sizeBytes && res.status === 200) {
+      sizeBytes = Number(res.headers.get('content-length') || 0);
+    }
+
+    let headBytes = Buffer.alloc(0);
+    if (res.body) {
+      const reader = res.body.getReader();
+      try {
+        while (headBytes.byteLength < 16) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          headBytes = Buffer.concat([headBytes, Buffer.from(value)]);
+        }
+      } finally {
+        void reader.cancel().catch(() => {});
+      }
+    }
+
+    const isPdf = headBytes.subarray(0, 5).toString('ascii') === '%PDF-';
+    return { ok: true, status: res.status, sizeBytes, isPdf };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function inspectArchiveIdentifier(identifier: string): Promise<ArchiveInspection> {
@@ -821,15 +937,6 @@ const INFOBOOKS_TRADING_BOOKS: EbookDefinition[] = [
     description: 'Day trading course covering market selection, 7-step strategy development, entry/exit rules, and money management.',
     filename: 'a-complete-guide-to-day-trading-markus-heitkoetter-412.pdf',
     pdfUrl: 'https://pdf.infobooks.org/ING/PDF/a-complete-guide-to-day-trading-markus-heitkoetter-412.pdf',
-  },
-  {
-    bookKey: 'ib-day-trading-beginners',
-    indexNumber: 8,
-    title: 'Day Trading Guide For Beginners',
-    authorOrFocus: 'Warrior Trading',
-    description: 'Step-by-step guide to day trading basics including tools, order types, chart reading, and setups.',
-    filename: 'Day-Trading-Guide-For-Beginners-Warrior-Trading.pdf',
-    pdfUrl: 'https://pdf.infobooks.org/ING/500%20Trading/Day-Trading-Guide-For-Beginners-Warrior-Trading.pdf',
   },
   {
     bookKey: 'ib-day-traders-bible',
@@ -1199,31 +1306,18 @@ async function storeInfoBookFromCatalog(bookKey: string): Promise<VaultBook> {
     throw new Error('Requested InfoBooks entry was not found.');
   }
 
-  const fileResponse = await fetchAllowlisted(def.pdfUrl);
-  if (!fileResponse.ok) {
+  const probe = await probeRemotePdfSource(def.pdfUrl);
+  if (!probe.ok) {
     throw new Error(
-      `InfoBooks returned HTTP ${fileResponse.status} while downloading "${def.title}".`
+      `InfoBooks returned HTTP ${probe.status} while verifying "${def.title}".`
     );
   }
-
-  const contentLength = Number(fileResponse.headers.get('content-length') || 0);
-  if (contentLength > MAX_PDF_BYTES) {
-    throw new Error('PDF exceeds the 50 MB vault storage limit.');
-  }
-
-  const arrayBuffer = await fileResponse.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  if (buffer.byteLength === 0 || buffer.byteLength > MAX_PDF_BYTES) {
-    throw new Error('Downloaded file size is invalid or exceeds 50 MB.');
-  }
-  if (buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+  if (!probe.isPdf) {
     throw new Error(`Source did not return a valid PDF document for "${def.title}".`);
   }
 
   const id = crypto.randomUUID();
   const storedFilename = `${id}.pdf`;
-  const targetPath = resolveVaultFilePath(storedFilename);
-  fs.writeFileSync(targetPath, buffer);
 
   const vaultEntry: VaultBook = {
     id,
@@ -1236,7 +1330,7 @@ async function storeInfoBookFromCatalog(bookKey: string): Promise<VaultBook> {
     sourceUrl: def.pdfUrl,
     originalFilename: def.filename,
     storedFilename,
-    sizeBytes: buffer.byteLength,
+    sizeBytes: probe.sizeBytes,
     coverPath: null,
     readingStatus: 'unread',
     notes: def.description,
@@ -1248,7 +1342,6 @@ async function storeInfoBookFromCatalog(bookKey: string): Promise<VaultBook> {
     ...current.filter((existing) => existing.bookKey !== def.bookKey),
   ]);
 
-  void ensureServerPdfCover(id, targetPath, VAULT_COVERS_DIR);
   return vaultEntry;
 }
 
@@ -1260,30 +1353,17 @@ async function storeSwingTradeEbookFromCatalog(
     return { statusCode: 404, error: 'Requested eBook entry was not found in the collection.' };
   }
 
-  const fileResponse = await fetchAllowlisted(def.pdfUrl);
-  if (!fileResponse.ok) {
+  const probe = await probeRemotePdfSource(def.pdfUrl);
+  if (!probe.ok) {
     return {
-      statusCode: fileResponse.status === 404 ? 404 : 502,
+      statusCode: probe.status === 404 ? 404 : 502,
       error:
-        fileResponse.status === 404
+        probe.status === 404
           ? `"${def.title}" returned HTTP 404 (file is currently missing on swing-trade-stocks.com).`
-          : `Source site returned HTTP ${fileResponse.status} while downloading "${def.title}".`,
+          : `Source site returned HTTP ${probe.status} while verifying "${def.title}".`,
     };
   }
-
-  const contentLength = Number(fileResponse.headers.get('content-length') || 0);
-  if (contentLength > MAX_PDF_BYTES) {
-    return { statusCode: 413, error: 'PDF exceeds the 50 MB vault storage limit.' };
-  }
-
-  const arrayBuffer = await fileResponse.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  if (buffer.byteLength === 0 || buffer.byteLength > MAX_PDF_BYTES) {
-    return { statusCode: 413, error: 'Downloaded file size is invalid or exceeds 50 MB.' };
-  }
-
-  if (buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+  if (!probe.isPdf) {
     return {
       statusCode: 422,
       error: `Source did not return a valid PDF document for "${def.title}".`,
@@ -1292,8 +1372,6 @@ async function storeSwingTradeEbookFromCatalog(
 
   const id = crypto.randomUUID();
   const storedFilename = `${id}.pdf`;
-  const targetPath = resolveVaultFilePath(storedFilename);
-  fs.writeFileSync(targetPath, buffer);
 
   const vaultEntry: VaultBook = {
     id,
@@ -1306,7 +1384,7 @@ async function storeSwingTradeEbookFromCatalog(
     sourceUrl: def.pdfUrl,
     originalFilename: def.filename,
     storedFilename,
-    sizeBytes: buffer.byteLength,
+    sizeBytes: probe.sizeBytes,
     coverPath: null,
     readingStatus: 'unread',
     notes: def.description,
@@ -1318,7 +1396,6 @@ async function storeSwingTradeEbookFromCatalog(
     ...current.filter((existing) => existing.bookKey !== def.bookKey),
   ]);
 
-  void ensureServerPdfCover(id, targetPath, VAULT_COVERS_DIR);
   return { item: vaultEntry };
 }
 
@@ -1348,34 +1425,19 @@ async function storeArchiveBookFromSpec(params: {
       ? inspection.freePdfs.find((f) => f.name === params.filename)
       : undefined) || inspection.freePdfs[0];
 
-  const fileResponse = await fetchAllowlisted(chosenPdf.downloadUrl);
-  if (!fileResponse.ok) {
+  const probe = await probeRemotePdfSource(chosenPdf.downloadUrl);
+  if (!probe.ok) {
     return {
       statusCode: 502,
-      error: `Archive.org returned HTTP ${fileResponse.status} while downloading the PDF.`,
+      error: `Archive.org returned HTTP ${probe.status} while verifying the PDF.`,
     };
   }
-
-  const contentLength = Number(fileResponse.headers.get('content-length') || 0);
-  if (contentLength > MAX_PDF_BYTES) {
-    return { statusCode: 413, error: 'PDF exceeds the 50 MB vault storage limit.' };
-  }
-
-  const arrayBuffer = await fileResponse.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  if (buffer.byteLength === 0 || buffer.byteLength > MAX_PDF_BYTES) {
-    return { statusCode: 413, error: 'Downloaded file size is invalid or exceeds 50 MB.' };
-  }
-
-  if (buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+  if (!probe.isPdf) {
     return { statusCode: 422, error: 'Remote source did not return a valid PDF document.' };
   }
 
   const id = crypto.randomUUID();
   const storedFilename = `${id}.pdf`;
-  const targetPath = resolveVaultFilePath(storedFilename);
-  fs.writeFileSync(targetPath, buffer);
 
   const numericYear =
     typeof params.year === 'number'
@@ -1392,10 +1454,10 @@ async function storeArchiveBookFromSpec(params: {
     year: numericYear,
     sourceType: 'archive',
     sourceIdentifier: identifier,
-    sourceUrl: inspection.detailsUrl,
+    sourceUrl: chosenPdf.downloadUrl,
     originalFilename: chosenPdf.name,
     storedFilename,
-    sizeBytes: buffer.byteLength,
+    sizeBytes: probe.sizeBytes || chosenPdf.sizeBytes || 0,
     coverPath:
       typeof params.coverPath === 'string' && params.coverPath.startsWith('/src/assets/images/')
         ? params.coverPath
@@ -1414,7 +1476,6 @@ async function storeArchiveBookFromSpec(params: {
     ),
   ]);
 
-  void ensureServerPdfCover(id, targetPath, VAULT_COVERS_DIR);
   return { item: vaultEntry };
 }
 
@@ -1429,9 +1490,13 @@ async function startServer() {
   };
 
   async function syncMissingCuratedBooks(unhideRepoBooks = false): Promise<void> {
-    if (syncState.syncing) return;
+    if (syncState.syncing || !unhideRepoBooks) return;
 
-    if (unhideRepoBooks) {
+    syncState.syncing = true;
+    syncState.completed = 0;
+    syncState.total = 1;
+
+    try {
       await mutateOverrides((current) => {
         const next: Record<string, BookOverride> = {};
         for (const [id, entry] of Object.entries(current)) {
@@ -1447,69 +1512,10 @@ async function startServer() {
         }
         return next;
       });
+      syncState.completed = 1;
+    } finally {
+      syncState.syncing = false;
     }
-
-    const existing = getCombinedCatalog();
-    const existingKeys = new Set(existing.map((item) => item.bookKey).filter(Boolean));
-
-    const missingInfobooks = INFOBOOKS_TRADING_BOOKS.filter(
-      (ib) => !existingKeys.has(ib.bookKey)
-    );
-    const missingClassics = buildRequestedBooksCatalog(existing).filter(
-      (c) => c.rights === 'public_domain' && !existingKeys.has(c.bookKey)
-    );
-    const missingEbooks = SWING_TRADE_EBOOKS.filter(
-      (eb) => eb.bookKey !== 'sts-indicators' && !existingKeys.has(eb.bookKey)
-    );
-
-    const tasks: Array<() => Promise<void>> = [
-      ...missingInfobooks.map((ib) => async () => {
-        await storeInfoBookFromCatalog(ib.bookKey);
-      }),
-      ...missingClassics.map((c) => async () => {
-        await storeArchiveBookFromSpec({
-          identifier: c.archiveIdentifier,
-          filename: c.preferredPdfFilename,
-          title: c.title,
-          author: c.author,
-          year: c.year,
-          bookKey: c.bookKey,
-          coverPath: c.coverPath,
-        });
-      }),
-      ...missingEbooks.map((eb) => async () => {
-        await storeSwingTradeEbookFromCatalog(eb.bookKey);
-      }),
-    ];
-
-    if (tasks.length === 0) return;
-
-    syncState.syncing = true;
-    syncState.completed = 0;
-    syncState.total = tasks.length;
-
-    console.log(
-      `Syncing ${tasks.length} missing curated books (${missingInfobooks.length} InfoBooks, ${missingClassics.length} classics, ${missingEbooks.length} Swing-Trade)...`
-    );
-
-    let cursor = 0;
-    const workerCount = Math.min(4, tasks.length);
-    const workers = Array.from({ length: workerCount }, async () => {
-      while (cursor < tasks.length) {
-        const index = cursor++;
-        try {
-          await tasks[index]();
-        } catch {
-          // Ignore transient network errors during background sync
-        } finally {
-          syncState.completed += 1;
-        }
-      }
-    });
-
-    await Promise.all(workers);
-    syncState.syncing = false;
-    console.log(`Vault sync finished: ${getCombinedCatalog().length} books available.`);
   }
 
   app.get('/api/collections/infobooks-trading', (_req: Request, res: Response) => {
@@ -1555,7 +1561,7 @@ async function startServer() {
       const item = await storeInfoBookFromCatalog(bookKey);
       res.status(201).json({ item });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to store InfoBooks PDF.';
+      const message = err instanceof Error ? err.message : 'Failed to verify InfoBooks PDF.';
       res.status(502).json({ error: message });
     }
   });
@@ -1619,7 +1625,7 @@ async function startServer() {
       }
       res.status(201).json({ item: result.item });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to store eBook PDF.';
+      const message = err instanceof Error ? err.message : 'Failed to register eBook PDF.';
       res.status(500).json({ error: message });
     }
   });
@@ -1638,9 +1644,9 @@ async function startServer() {
     });
   });
 
-  app.post('/api/vault/sync', (_req: Request, res: Response) => {
-    void syncMissingCuratedBooks(true);
-    res.status(202).json({
+  app.post('/api/vault/sync', async (_req: Request, res: Response) => {
+    await syncMissingCuratedBooks(true);
+    res.status(200).json({
       syncing: syncState.syncing,
       syncProgress: {
         completed: syncState.completed,
@@ -1862,14 +1868,20 @@ async function startServer() {
       }
 
       if (!uploadItem) {
-        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.setHeader('Cache-Control', 'no-store');
         res.status(404).json({ error: 'Cover preview unavailable.' });
         return;
       }
 
       const pdfPath = resolveVaultFilePath(item.storedFilename);
+      if (!fs.existsSync(pdfPath)) {
+        res.setHeader('Cache-Control', 'no-store');
+        res.status(404).json({ error: 'Cover preview unavailable.' });
+        return;
+      }
       const generated = await ensureServerPdfCover(item.id, pdfPath, coverDir);
       if (!generated || !fs.existsSync(generated)) {
+        res.setHeader('Cache-Control', 'no-store');
         res.status(404).json({ error: 'Cover preview unavailable.' });
         return;
       }
@@ -1878,6 +1890,7 @@ async function startServer() {
       res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
       res.sendFile(generated);
     } catch {
+      res.setHeader('Cache-Control', 'no-store');
       res.status(404).json({ error: 'Unable to serve cover.' });
     }
   });
@@ -1926,7 +1939,7 @@ async function startServer() {
     }
   );
 
-  app.get('/api/vault/:id/file', (req: Request, res: Response) => {
+  async function handleVaultFileRequest(req: Request, res: Response) {
     const id = String(req.params.id || '');
     const uploadItem = readCatalog().find((entry) => entry.id === id);
     const overrides = readOverrides();
@@ -1935,34 +1948,164 @@ async function startServer() {
       : undefined;
     const item = uploadItem || repoItem;
     if (!item) {
-      res.status(404).json({ error: 'Stored PDF not found in vault.' });
+      res.status(404).json({ error: 'PDF not found in vault.' });
       return;
     }
 
+    const isHead = req.method === 'HEAD';
+    const isDownload = req.query.download === '1';
+    const safeName = sanitizeDownloadFilename(item.title || item.originalFilename);
+
     try {
-      const filePath = uploadItem
+      const localFilePath = uploadItem
         ? resolveVaultFilePath(item.storedFilename)
         : resolveLibraryFilePath(item.storedFilename);
-      if (!fs.existsSync(filePath)) {
-        res.status(404).json({ error: 'PDF file missing on disk.' });
+
+      if (fs.existsSync(localFilePath)) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader(
+          'Content-Disposition',
+          `${isDownload ? 'attachment' : 'inline'}; filename="${safeName}"`
+        );
+        if (!uploadItem && !isDownload) {
+          res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        }
+        res.sendFile(localFilePath);
         return;
       }
-      const isDownload = req.query.download === '1';
-      const safeName = sanitizeDownloadFilename(item.title || item.originalFilename);
+
+      if (!hasValidRemoteSourceUrl(item.sourceUrl)) {
+        res.status(404).json({ error: 'PDF file missing on disk and no approved source URL is configured.' });
+        return;
+      }
+
+      const forwardHeaders: Record<string, string> = {};
+      const rangeHeader = req.headers.range;
+      if (
+        typeof rangeHeader === 'string' &&
+        rangeHeader.length <= 128 &&
+        /^bytes=\d*-\d*(?:,\s*\d*-\d*)*$/i.test(rangeHeader.trim())
+      ) {
+        forwardHeaders['Range'] = rangeHeader.trim();
+      }
+      const ifRangeHeader = req.headers['if-range'];
+      if (
+        typeof ifRangeHeader === 'string' &&
+        ifRangeHeader.length > 0 &&
+        ifRangeHeader.length <= 128 &&
+        !/[^\x20-\x7e]/.test(ifRangeHeader)
+      ) {
+        forwardHeaders['If-Range'] = ifRangeHeader;
+      }
+
+      const controller = new AbortController();
+      const timeoutMs = forwardHeaders['Range'] || isHead ? 25000 : 60000;
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let activeNodeStream: Readable | null = null;
+
+      res.on('close', () => {
+        clearTimeout(timer);
+        if (!res.writableEnded) {
+          controller.abort();
+          activeNodeStream?.destroy();
+        }
+      });
+
+      const upstream = await fetchAllowlisted(item.sourceUrl, 5, {
+        method: isHead ? 'HEAD' : 'GET',
+        extraHeaders: forwardHeaders,
+        signal: controller.signal,
+      });
+
+      if (upstream.status === 416) {
+        void upstream.body?.cancel().catch(() => {});
+        clearTimeout(timer);
+        const cr = upstream.headers.get('content-range');
+        if (cr) res.setHeader('Content-Range', cr);
+        res.status(416).end();
+        return;
+      }
+
+      if (!upstream.ok) {
+        void upstream.body?.cancel().catch(() => {});
+        clearTimeout(timer);
+        res.status(upstream.status === 404 ? 404 : 502).json({
+          error: `Remote source returned HTTP ${upstream.status}.`,
+        });
+        return;
+      }
+
+      const upstreamType = (upstream.headers.get('content-type') || '').toLowerCase();
+      if (upstreamType.includes('text/html')) {
+        void upstream.body?.cancel().catch(() => {});
+        clearTimeout(timer);
+        res.status(502).json({ error: 'Remote source returned HTML instead of a PDF.' });
+        return;
+      }
+
+      res.status(upstream.status);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader(
         'Content-Disposition',
         `${isDownload ? 'attachment' : 'inline'}; filename="${safeName}"`
       );
-      if (!uploadItem && !isDownload) {
-        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+
+      for (const headerName of [
+        'accept-ranges',
+        'content-range',
+        'content-length',
+        'etag',
+        'last-modified',
+      ]) {
+        const val = upstream.headers.get(headerName);
+        if (val) {
+          res.setHeader(headerName, val);
+        }
       }
-      res.sendFile(filePath);
+
+      if (!isDownload && !forwardHeaders['Range']) {
+        res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+      }
+
+      if (isHead || !upstream.body) {
+        void upstream.body?.cancel().catch(() => {});
+        clearTimeout(timer);
+        res.end();
+        return;
+      }
+
+      activeNodeStream = Readable.fromWeb(
+        upstream.body as unknown as import('node:stream/web').ReadableStream<Uint8Array>
+      );
+      activeNodeStream.on('end', () => clearTimeout(timer));
+      activeNodeStream.on('close', () => clearTimeout(timer));
+      activeNodeStream.on('error', () => {
+        clearTimeout(timer);
+        if (!res.headersSent) {
+          res.status(502).end();
+        } else {
+          res.destroy();
+        }
+      });
+      activeNodeStream.pipe(res);
     } catch (err) {
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
       const message = err instanceof Error ? err.message : 'Unable to stream PDF.';
-      res.status(400).json({ error: message });
+      res.status(502).json({ error: message });
     }
+  }
+
+  app.head('/api/vault/:id/file', (req: Request, res: Response) => {
+    void handleVaultFileRequest(req, res);
+  });
+
+  app.get('/api/vault/:id/file', (req: Request, res: Response) => {
+    void handleVaultFileRequest(req, res);
   });
 
   app.patch('/api/vault/:id', async (req: Request, res: Response) => {
@@ -1973,6 +2116,7 @@ async function startServer() {
       lastPage?: number | null;
       totalPages?: number | null;
       bookmarkedPage?: number | null;
+      keeperColor?: BookKeeperColor | null;
       lastReadAt?: string | null;
     };
 
@@ -1985,9 +2129,26 @@ async function startServer() {
       return undefined;
     };
 
+    const sanitizeKeeperColor = (val: unknown): BookKeeperColor | null | undefined => {
+      if (val === undefined) return undefined;
+      if (val === null) return null;
+      if (
+        val === 'crimson' ||
+        val === 'emerald' ||
+        val === 'sapphire' ||
+        val === 'amber' ||
+        val === 'violet' ||
+        val === 'teal'
+      ) {
+        return val;
+      }
+      return undefined;
+    };
+
     const nextLastPage = sanitizePageNumber(body.lastPage);
     const nextTotalPages = sanitizePageNumber(body.totalPages);
     const nextBookmarkedPage = sanitizePageNumber(body.bookmarkedPage);
+    const nextKeeperColor = sanitizeKeeperColor(body.keeperColor);
     const nextLastReadAt =
       body.lastReadAt === null
         ? null
@@ -2013,6 +2174,7 @@ async function startServer() {
       if (nextLastPage !== undefined) updated.lastPage = nextLastPage;
       if (nextTotalPages !== undefined) updated.totalPages = nextTotalPages;
       if (nextBookmarkedPage !== undefined) updated.bookmarkedPage = nextBookmarkedPage;
+      if (nextKeeperColor !== undefined) updated.keeperColor = nextKeeperColor;
       if (nextLastReadAt !== undefined) updated.lastReadAt = nextLastReadAt;
       updatedItem = updated;
       const next = [...current];
@@ -2040,6 +2202,7 @@ async function startServer() {
           if (nextLastPage !== undefined) nextEntry.lastPage = nextLastPage;
           if (nextTotalPages !== undefined) nextEntry.totalPages = nextTotalPages;
           if (nextBookmarkedPage !== undefined) nextEntry.bookmarkedPage = nextBookmarkedPage;
+          if (nextKeeperColor !== undefined) nextEntry.keeperColor = nextKeeperColor;
           if (nextLastReadAt !== undefined) nextEntry.lastReadAt = nextLastReadAt;
           merged = applyOverride(repoBook, nextEntry);
           return { ...current, [id]: nextEntry };
@@ -2122,7 +2285,6 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Folio Vault running at http://0.0.0.0:${PORT}`);
-    void syncMissingCuratedBooks();
   });
 }
 

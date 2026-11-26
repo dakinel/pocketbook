@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bookmark, ChevronLeft, ChevronRight, Contrast, Loader2, Minus, Plus, RotateCcw, X } from 'lucide-react';
+import type { BookKeeperColor } from '../types.ts';
+import {
+  BOOK_KEEPER_COLORS,
+  BOOK_KEEPER_PALETTE,
+  getBookKeeperRibbonStyle,
+} from '../utils/bookProgress.ts';
 
 export interface FocusAnchor {
   pageNum: number;
@@ -33,7 +39,9 @@ interface FocusedPageOverlayProps {
   hiResImages: Record<number, string>;
   pageErrors: Record<number, string>;
   keptPage?: number | null;
+  keeperColor?: BookKeeperColor;
   onToggleBookmark?: (pageNum: number) => void;
+  onSelectKeeperColor?: (color: BookKeeperColor, pageNum: number) => void;
   onRequestHiRes: (pageNum: number) => void;
   onChangePage: (nextPageNum: number) => void;
   onClose: () => void;
@@ -50,7 +58,9 @@ export function FocusedPageOverlay({
   hiResImages,
   pageErrors,
   keptPage = null,
+  keeperColor = 'crimson',
   onToggleBookmark,
+  onSelectKeeperColor,
   onRequestHiRes,
   onChangePage,
   onClose,
@@ -66,6 +76,13 @@ export function FocusedPageOverlay({
     moved: boolean;
   } | null>(null);
   const lastTouchTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchRef = useRef<{
+    dist: number;
+    startZoom: number;
+    basePtX: number;
+    basePtY: number;
+  } | null>(null);
 
   const [viewportSize, setViewportSize] = useState<{ w: number; h: number }>({
     w: typeof window !== 'undefined' ? window.innerWidth : 1200,
@@ -77,6 +94,7 @@ export function FocusedPageOverlay({
   const [isDragging, setIsDragging] = useState(false);
   const [tone, setTone] = useState<PaperTone>('crisp');
   const [entered, setEntered] = useState(false);
+  const [ribbonRevealed, setRibbonRevealed] = useState(false);
 
   const activeSrc = hiResImages[anchor.pageNum] || pageImages[anchor.pageNum] || '';
   const isHiResReady = Boolean(hiResImages[anchor.pageNum]);
@@ -89,6 +107,15 @@ export function FocusedPageOverlay({
     const raf = window.requestAnimationFrame(() => setEntered(true));
     return () => window.cancelAnimationFrame(raf);
   }, []);
+
+  useEffect(() => {
+    setRibbonRevealed(false);
+    if (!entered || keptPage !== anchor.pageNum) return;
+    const timer = window.setTimeout(() => {
+      setRibbonRevealed(true);
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [entered, keptPage, anchor.pageNum]);
 
   useEffect(() => {
     const updateSize = () => {
@@ -105,8 +132,8 @@ export function FocusedPageOverlay({
   }, []);
 
   const baseSize = useMemo(() => {
-    const padX = viewportSize.w < 640 ? 24 : 72;
-    const padY = viewportSize.w < 640 ? 124 : 136;
+    const padX = viewportSize.w < 640 ? 16 : 72;
+    const padY = viewportSize.w < 640 ? 156 : 136;
     const maxW = Math.min(Math.max(240, viewportSize.w - padX), 1040);
     const maxH = Math.max(240, viewportSize.h - padY);
     let w = maxW;
@@ -228,18 +255,79 @@ export function FocusedPageOverlay({
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    dragRef.current = {
-      pointerId: e.pointerId,
-      startX: e.clientX,
-      startY: e.clientY,
-      startPanX: pan.x,
-      startPanY: pan.y,
-      moved: false,
-    };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore capture failure on unsupported browsers
+    }
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointersRef.current.size === 2) {
+      const pts = Array.from(activePointersRef.current.values());
+      const dist = Math.max(12, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y));
+      const midX = (pts[0].x + pts[1].x) / 2;
+      const midY = (pts[0].y + pts[1].y) / 2;
+      const rect = viewportRef.current?.getBoundingClientRect();
+      const cx = rect ? midX - (rect.left + rect.width / 2) : 0;
+      const cy = rect ? midY - (rect.top + rect.height / 2) : 0;
+      dragRef.current = null;
+      pinchRef.current = {
+        dist,
+        startZoom: zoom,
+        basePtX: (cx - pan.x) / zoom,
+        basePtY: (cy - pan.y) / zoom,
+      };
+      setIsDragging(true);
+      return;
+    }
+
+    if (activePointersRef.current.size === 1) {
+      pinchRef.current = null;
+      dragRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        startPanX: pan.x,
+        startPanY: pan.y,
+        moved: false,
+      };
+    }
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    if (activePointersRef.current.size >= 2 && pinchRef.current) {
+      const pts = Array.from(activePointersRef.current.values());
+      const nextDist = Math.max(12, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y));
+      const nextZoom = clamp(
+        Number((pinchRef.current.startZoom * (nextDist / pinchRef.current.dist)).toFixed(2)),
+        MIN_ZOOM,
+        MAX_ZOOM
+      );
+      if (nextZoom <= 1.02) {
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+        return;
+      }
+      const midX = (pts[0].x + pts[1].x) / 2;
+      const midY = (pts[0].y + pts[1].y) / 2;
+      const rect = viewportRef.current?.getBoundingClientRect();
+      if (rect) {
+        const cx = midX - (rect.left + rect.width / 2);
+        const cy = midY - (rect.top + rect.height / 2);
+        const nextPanX = cx - pinchRef.current.basePtX * nextZoom;
+        const nextPanY = cy - pinchRef.current.basePtY * nextZoom;
+        setZoom(nextZoom);
+        setPan(clampPan(nextPanX, nextPanY, nextZoom));
+      } else {
+        setZoom(nextZoom);
+      }
+      return;
+    }
+
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
     const dx = e.clientX - drag.startX;
@@ -254,11 +342,22 @@ export function FocusedPageOverlay({
   }
 
   function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    activePointersRef.current.delete(e.pointerId);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+
+    if (pinchRef.current) {
+      if (activePointersRef.current.size < 2) {
+        pinchRef.current = null;
+        dragRef.current = null;
+        setIsDragging(false);
+      }
+      return;
+    }
+
     const drag = dragRef.current;
     if (drag && drag.pointerId === e.pointerId) {
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      }
       const wasTap = !drag.moved;
       dragRef.current = null;
       setIsDragging(false);
@@ -310,13 +409,13 @@ export function FocusedPageOverlay({
           onClose();
         }
       }}
-      className={`fixed inset-0 z-[80] flex flex-col select-none transition-opacity duration-200 ${
+      className={`fixed inset-0 h-dvh z-[80] flex flex-col select-none transition-opacity duration-200 ${
         entered ? 'bg-[#060d0f]/95 opacity-100' : 'bg-[#060d0f]/0 opacity-0'
       }`}
     >
       {/* Top minimal overlay bar */}
       <div
-        className="relative z-20 flex items-center justify-between px-4 sm:px-6 pt-3 sm:pt-4 pointer-events-none"
+        className="relative z-20 flex items-center justify-between px-3 sm:px-6 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-4 pointer-events-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="pointer-events-auto inline-flex items-center px-3 py-1.5 rounded-lg bg-[#0d191c]/90 border border-white/12 text-xs text-[#d6e6e7] shadow-lg">
@@ -372,23 +471,40 @@ export function FocusedPageOverlay({
               isDragging ? 'cursor-grabbing' : zoom > 1.05 ? 'cursor-grab' : 'cursor-zoom-in'
             }`}
           >
-            {keptPage === anchor.pageNum ? (
-              <button
-                key={`focus-keeper-${anchor.pageNum}`}
-                type="button"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleBookmark?.(anchor.pageNum);
+            {ribbonRevealed && keptPage === anchor.pageNum ? (
+              <div
+                style={{
+                  right: `${Math.round(18 / zoom)}px`,
+                  transform: `scale(${(zoom > 1.05 ? 0.68 : 1) / zoom})`,
+                  transformOrigin: 'top right',
+                  transition: isDragging
+                    ? 'none'
+                    : 'transform 260ms cubic-bezier(0.22, 1, 0.36, 1), right 260ms cubic-bezier(0.22, 1, 0.36, 1)',
                 }}
-                title={`Book Keeper at Page ${anchor.pageNum}${onToggleBookmark ? ' — click to toggle' : ''}`}
-                aria-label={`Book Keeper at Page ${anchor.pageNum}`}
-                className="reader-book-keeper-ribbon absolute top-0 right-5 z-20 flex flex-col items-center justify-end cursor-pointer"
+                className="absolute top-0 z-20"
               >
-                <span className="text-[9px] font-mono font-bold tabular-nums text-[#fff5f5] leading-none">
-                  p.{anchor.pageNum}
-                </span>
-              </button>
+                <button
+                  key={`focus-keeper-${anchor.pageNum}`}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleBookmark?.(anchor.pageNum);
+                  }}
+                  style={getBookKeeperRibbonStyle(keeperColor)}
+                  title={`${BOOK_KEEPER_PALETTE[keeperColor].label} Book Keeper at Page ${anchor.pageNum}${onToggleBookmark ? ' — click to toggle' : ''}`}
+                  aria-label={`Book Keeper at Page ${anchor.pageNum}`}
+                  className="reader-book-keeper-ribbon flex flex-col items-center justify-end cursor-pointer"
+                >
+                  <span
+                    style={{ color: BOOK_KEEPER_PALETTE[keeperColor].text }}
+                    className="text-[9px] font-mono font-bold tabular-nums leading-none"
+                  >
+                    p.{anchor.pageNum}
+                  </span>
+                </button>
+              </div>
             ) : null}
             <img
               ref={imgRef}
@@ -415,10 +531,10 @@ export function FocusedPageOverlay({
 
       {/* Bottom compact reading & zoom dock */}
       <div
-        className="relative z-20 flex justify-center px-3 pb-4 pt-1 pointer-events-none"
+        className="relative z-20 flex justify-center px-2 sm:px-3 pb-[max(0.85rem,env(safe-area-inset-bottom))] pt-1 pointer-events-none"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2 px-2.5 py-1.5 rounded-xl bg-[#0d191c]/92 border border-white/12 shadow-[0_18px_42px_-10px_rgba(0,0,0,0.75)] text-xs text-white/90">
+        <div className="pointer-events-auto flex flex-wrap items-center justify-center max-w-[calc(100vw-16px)] gap-1 sm:gap-2 px-2 sm:px-2.5 py-1.5 rounded-xl bg-[#0d191c]/92 border border-white/12 shadow-[0_18px_42px_-10px_rgba(0,0,0,0.75)] text-[11px] sm:text-xs text-white/90">
           <button
             type="button"
             disabled={anchor.pageNum <= 1}
@@ -439,7 +555,7 @@ export function FocusedPageOverlay({
             <ChevronRight className="w-4 h-4" />
           </button>
 
-          <span className="w-px h-4 bg-white/15" aria-hidden="true" />
+          <span className="hidden sm:inline-block w-px h-4 bg-white/15" aria-hidden="true" />
 
           <button
             type="button"
@@ -455,7 +571,7 @@ export function FocusedPageOverlay({
             type="button"
             onClick={() => zoomAtPoint(zoom > 1.05 ? 1 : DEFAULT_FOCUS_ZOOM)}
             title="Toggle 100% / Focus zoom"
-            className="px-2 py-1 rounded-md hover:bg-white/10 font-mono tabular-nums text-[11px] min-w-[46px] text-center transition-colors cursor-pointer"
+            className="px-1.5 sm:px-2 py-1 rounded-md hover:bg-white/10 font-mono tabular-nums text-[11px] min-w-[42px] sm:min-w-[46px] text-center transition-colors cursor-pointer"
           >
             {Math.round(zoom * 100)}%
           </button>
@@ -482,13 +598,13 @@ export function FocusedPageOverlay({
             </button>
           ) : null}
 
-          <span className="w-px h-4 bg-white/15" aria-hidden="true" />
+          <span className="hidden sm:inline-block w-px h-4 bg-white/15" aria-hidden="true" />
 
           <button
             type="button"
             onClick={cycleTone}
             title="Cycle reading paper contrast"
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/8 hover:bg-white/15 text-[#d4ebea] whitespace-nowrap transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg bg-white/8 hover:bg-white/15 text-[#d4ebea] whitespace-nowrap transition-colors cursor-pointer"
           >
             <Contrast className="w-3.5 h-3.5 text-[#7fd4cb]" />
             <span>{TONE_LABELS[tone]}</span>
@@ -496,27 +612,69 @@ export function FocusedPageOverlay({
 
           {onToggleBookmark ? (
             <>
-              <span className="w-px h-4 bg-white/15" aria-hidden="true" />
-              <button
-                type="button"
-                onClick={() => onToggleBookmark(anchor.pageNum)}
-                title={
-                  keptPage === anchor.pageNum
-                    ? 'Remove red bookmark from this page'
-                    : `Keep reading progress at Page ${anchor.pageNum}`
-                }
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors cursor-pointer ${
-                  keptPage === anchor.pageNum
-                    ? 'bg-[#b91c1c] hover:bg-[#dc2626] text-white border border-[#fca5a5]/35 shadow-sm'
-                    : 'bg-white/8 hover:bg-[#b91c1c]/80 text-[#fca5a5] hover:text-white'
-                }`}
-              >
-                <Bookmark
-                  className="w-3.5 h-3.5"
-                  fill={keptPage === anchor.pageNum ? 'currentColor' : 'none'}
-                />
-                <span>{keptPage === anchor.pageNum ? `Kept p.${anchor.pageNum}` : 'Keep Page'}</span>
-              </button>
+              <span className="hidden sm:inline-block w-px h-4 bg-white/15" aria-hidden="true" />
+              <div className="inline-flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onToggleBookmark(anchor.pageNum)}
+                  style={
+                    keptPage === anchor.pageNum
+                      ? {
+                          backgroundColor: BOOK_KEEPER_PALETTE[keeperColor].buttonBg,
+                          borderColor: BOOK_KEEPER_PALETTE[keeperColor].buttonBorder,
+                          color: '#ffffff',
+                          boxShadow: BOOK_KEEPER_PALETTE[keeperColor].glow,
+                        }
+                      : {
+                          color: BOOK_KEEPER_PALETTE[keeperColor].buttonMutedText,
+                        }
+                  }
+                  title={
+                    keptPage === anchor.pageNum
+                      ? 'Remove Book Keeper from this page'
+                      : `Keep reading progress at Page ${anchor.pageNum}`
+                  }
+                  className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg border whitespace-nowrap transition-colors cursor-pointer ${
+                    keptPage === anchor.pageNum
+                      ? ''
+                      : 'bg-white/8 hover:bg-white/15 border-transparent hover:text-white'
+                  }`}
+                >
+                  <Bookmark
+                    className="w-3.5 h-3.5"
+                    fill={keptPage === anchor.pageNum ? 'currentColor' : 'none'}
+                  />
+                  <span>{keptPage === anchor.pageNum ? `Kept p.${anchor.pageNum}` : 'Keep Page'}</span>
+                </button>
+                {onSelectKeeperColor ? (
+                  <div
+                    role="group"
+                    aria-label="Book Keeper ribbon color"
+                    className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg bg-white/6 border border-white/10"
+                  >
+                    {BOOK_KEEPER_COLORS.map((c) => {
+                      const entry = BOOK_KEEPER_PALETTE[c];
+                      const active = keeperColor === c;
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => onSelectKeeperColor(c, anchor.pageNum)}
+                          title={`${entry.label} Book Keeper`}
+                          aria-label={`Use ${entry.label} Book Keeper`}
+                          aria-pressed={active}
+                          style={{ backgroundColor: entry.swatch }}
+                          className={`w-3.5 h-3.5 rounded-full transition-transform cursor-pointer ${
+                            active
+                              ? 'ring-2 ring-white ring-offset-1 ring-offset-[#0d191c] scale-110'
+                              : 'opacity-75 hover:opacity-100 hover:scale-110'
+                          }`}
+                        />
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             </>
           ) : null}
         </div>

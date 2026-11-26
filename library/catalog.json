@@ -181,7 +181,7 @@
     "originalFilename": "applied-corporate-finance-aswath-damodaran-2023.pdf",
     "storedFilename": "ib-applied-corporate-finance.pdf",
     "sizeBytes": 1053700,
-    "coverPath": null,
+    "coverPath": "/src/assets/images/cover_applied_corporate_finance_1795671381692.jpg",
     "readingStatus": "unread",
     "notes": "NYU Stern valuation expert Aswath Damodaran on investment analysis, capital structure, dividends, and firm valuation.",
     "storedAt": "2026-11-25T17:37:06.897Z"
@@ -253,23 +253,6 @@
     "readingStatus": "unread",
     "notes": "Comprehensive corporate finance text covering financial statement analysis, DCF valuation, M&A, and securities.",
     "storedAt": "2026-11-25T17:37:11.817Z"
-  },
-  {
-    "id": "ib-day-trading-beginners",
-    "bookKey": "ib-day-trading-beginners",
-    "title": "Day Trading Guide For Beginners",
-    "author": "Warrior Trading",
-    "year": null,
-    "sourceType": "infobooks",
-    "sourceIdentifier": "Day-Trading-Guide-For-Beginners-Warrior-Trading.pdf",
-    "sourceUrl": "https://pdf.infobooks.org/ING/500%20Trading/Day-Trading-Guide-For-Beginners-Warrior-Trading.pdf",
-    "originalFilename": "Day-Trading-Guide-For-Beginners-Warrior-Trading.pdf",
-    "storedFilename": "ib-day-trading-beginners.pdf",
-    "sizeBytes": 2041341,
-    "coverPath": null,
-    "readingStatus": "unread",
-    "notes": "Step-by-step guide to day trading basics including tools, order types, chart reading, and setups.",
-    "storedAt": "2026-11-25T16:04:16.014Z"
   },
   {
     "id": "sts-day-trading-mind",
@@ -504,7 +487,7 @@
     "originalFilename": "04.-Introduction-to-Trading-System-Development-Author-David-Cardoza.pdf",
     "storedFilename": "ib-trading-system-development.pdf",
     "sizeBytes": 560659,
-    "coverPath": null,
+    "coverPath": "/src/assets/images/cover_trading_system_development_1795671601310.jpg",
     "readingStatus": "unread",
     "notes": "Building automated trading systems, trend-following crossovers, Monte Carlo analysis, and backtesting.",
     "storedAt": "2026-11-25T16:04:15.529Z"
