@@ -1482,6 +1482,20 @@ async function storeArchiveBookFromSpec(params: {
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
+  app.use('/api/vault', (req: Request, res: Response, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range, If-Range');
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'Accept-Ranges, Content-Range, Content-Length, ETag, Last-Modified'
+    );
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
 
   const syncState = {
     syncing: false,

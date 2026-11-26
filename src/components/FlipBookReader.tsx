@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { Bookmark, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from 'lucide-react';
+import {
+  Bookmark,
+  ChevronLeft,
+  ChevronRight,
+  Circle,
+  Highlighter,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  PenTool,
+  ZoomIn,
+} from 'lucide-react';
 import type { BookKeeperColor, ReadingStatus, VaultBook } from '../types.ts';
 import {
   BOOK_KEEPER_COLORS,
@@ -14,7 +26,22 @@ import {
   type BookProgressState,
 } from '../utils/bookProgress.ts';
 import { getCachedPdfCoverSync, getOrRenderPdfCover } from '../utils/pdfCoverCache.ts';
-import { FocusedPageOverlay, type FocusAnchor } from './FocusedPageOverlay.tsx';
+import {
+  extractBookBindingThemeFromImage,
+  getBookBindingCssVars,
+  getCachedBookBindingTheme,
+  type BookBindingTheme,
+} from '../utils/coverColorTheme.ts';
+import {
+  FocusedPageOverlay,
+  FolioPenCursor,
+  PageAnnotationsLayer,
+  type DraftPageStroke,
+  type FocusAnchor,
+  type PageAnnotation,
+  type PageAnnotationPoint,
+  type PenToolMode,
+} from './FocusedPageOverlay.tsx';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -69,6 +96,281 @@ export interface PocketOriginRect {
   height: number;
 }
 
+const PAGE_ANNOTATIONS_PREFIX = 'folio-page-annotations-v1:';
+
+function loadBookAnnotations(bookId: string): PageAnnotation[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(`${PAGE_ANNOTATIONS_PREFIX}${bookId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (item): item is PageAnnotation =>
+          item &&
+          typeof item.id === 'string' &&
+          typeof item.pageNum === 'number' &&
+          (item.type === 'mark' || item.type === 'circle') &&
+          typeof item.rx === 'number' &&
+          typeof item.ry === 'number'
+      )
+      .map((item) => ({
+        ...item,
+        points: Array.isArray(item.points)
+          ? item.points.filter(
+              (pt): pt is PageAnnotationPoint =>
+                Boolean(pt) && typeof pt.x === 'number' && typeof pt.y === 'number'
+            )
+          : undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function saveBookAnnotations(bookId: string, annotations: PageAnnotation[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      `${PAGE_ANNOTATIONS_PREFIX}${bookId}`,
+      JSON.stringify(annotations)
+    );
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function SpreadPageSurface({
+  src,
+  alt,
+  annotations,
+  freshIds,
+  interactiveAnnotations = true,
+  draftStroke = null,
+  onRemoveAnnotation,
+}: {
+  src: string;
+  alt: string;
+  annotations: PageAnnotation[];
+  freshIds?: Set<string>;
+  interactiveAnnotations?: boolean;
+  draftStroke?: { type: 'mark' | 'circle'; points: PageAnnotationPoint[] } | null;
+  onRemoveAnnotation: (id: string) => void;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [boxSize, setBoxSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const [aspect, setAspect] = useState(0.77);
+
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+    const measure = () => {
+      const style = window.getComputedStyle(el);
+      const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+      const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+      setBoxSize({
+        w: Math.max(0, el.clientWidth - padX),
+        h: Math.max(0, el.clientHeight - padY),
+      });
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const fitStyle = useMemo<React.CSSProperties | undefined>(() => {
+    if (boxSize.w <= 0 || boxSize.h <= 0 || aspect <= 0) return undefined;
+    let w = boxSize.w;
+    let h = w / aspect;
+    if (h > boxSize.h) {
+      h = boxSize.h;
+      w = h * aspect;
+    }
+    return { width: `${Math.round(w)}px`, height: `${Math.round(h)}px` };
+  }, [boxSize.w, boxSize.h, aspect]);
+
+  return (
+    <div ref={hostRef} className="w-full h-full p-2 sm:p-3 flex items-center justify-center">
+      <div style={fitStyle} className="relative shrink-0">
+        <img
+          src={src}
+          alt={alt}
+          draggable={false}
+          onLoad={(e) => {
+            const { naturalWidth, naturalHeight } = e.currentTarget;
+            if (naturalWidth > 0 && naturalHeight > 0) {
+              setAspect(naturalWidth / naturalHeight);
+            }
+          }}
+          className="w-full h-full object-contain block select-none"
+        />
+        <PageAnnotationsLayer
+          annotations={annotations}
+          freshIds={freshIds}
+          interactive={interactiveAnnotations}
+          draftStroke={draftStroke}
+          onRemove={onRemoveAnnotation}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface TapMenuAnchor {
+  pageNum: number;
+  rx: number;
+  ry: number;
+  screenX: number;
+  screenY: number;
+}
+
+function DoubleTapFabMenu({
+  anchor,
+  onZoom,
+  onMark,
+  onCircle,
+  onClose,
+}: {
+  anchor: TapMenuAnchor;
+  onZoom: () => void;
+  onMark: () => void;
+  onCircle: () => void;
+  onClose: () => void;
+}) {
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    let raf2 = 0;
+    const raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        setActive(true);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+    };
+  }, [anchor]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [onClose]);
+
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const clampedX = Math.max(92, Math.min(vw - 92, anchor.screenX));
+  const clampedY = Math.max(115, Math.min(vh - 46, anchor.screenY));
+
+  const menuContent = (
+    <div
+      className="fixed inset-0 z-[95]"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        style={{
+          position: 'fixed',
+          left: `${Math.round(clampedX)}px`,
+          top: `${Math.round(clampedY)}px`,
+          transform: 'translate(-50%, -50%)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className={`folio-fab-container ${active ? 'active' : ''}`}
+          role="menu"
+          aria-label={`Page ${anchor.pageNum} quick options`}
+        >
+          <span className="folio-fab-ripple" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            aria-label="Close page options"
+            title="Close options"
+            className="folio-fab-button"
+          >
+            <span className="folio-fab-pen" aria-hidden="true">
+              <PenTool className="w-[22px] h-[22px]" strokeWidth={2.1} />
+            </span>
+          </button>
+
+          <div className="folio-fab-options">
+            <button
+              type="button"
+              role="menuitem"
+              title="Zoom"
+              aria-label="Zoom page"
+              onClick={(e) => {
+                e.stopPropagation();
+                onZoom();
+              }}
+              className="folio-fab-option folio-fab-opt-zoom"
+            >
+              <ZoomIn className="w-[18px] h-[18px]" strokeWidth={2.2} />
+              <span className="text-[9px] font-semibold leading-none tracking-tight">Zoom</span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              title="Mark"
+              aria-label="Mark highlight on page"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMark();
+              }}
+              className="folio-fab-option folio-fab-opt-mark"
+            >
+              <Highlighter className="w-[18px] h-[18px]" strokeWidth={2.2} />
+              <span className="text-[9px] font-semibold leading-none tracking-tight">Mark</span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              title="Circle"
+              aria-label="Circle on page"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCircle();
+              }}
+              className="folio-fab-option folio-fab-opt-circle"
+            >
+              <Circle className="w-[18px] h-[18px]" strokeWidth={2.3} />
+              <span className="text-[9px] font-semibold leading-none tracking-tight">Circle</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(menuContent, document.body);
+}
+
 interface FlipBookReaderProps {
   book: VaultBook;
   originRect?: PocketOriginRect | null;
@@ -92,6 +394,13 @@ export function FlipBookReader({
   const [jumpValue, setJumpValue] = useState('1');
   const [singleZoom, setSingleZoom] = useState(false);
   const [focusAnchor, setFocusAnchor] = useState<FocusAnchor | null>(null);
+  const [tapMenu, setTapMenu] = useState<TapMenuAnchor | null>(null);
+  const [activePenTool, setActivePenTool] = useState<PenToolMode>(null);
+  const [draftStroke, setDraftStroke] = useState<DraftPageStroke | null>(null);
+  const [freshAnnotationIds, setFreshAnnotationIds] = useState<Set<string>>(() => new Set());
+  const [annotations, setAnnotations] = useState<PageAnnotation[]>(() =>
+    loadBookAnnotations(book.id)
+  );
   const [hiResImages, setHiResImages] = useState<Record<number, string>>({});
   const [progress, setProgress] = useState<BookProgressState>(() => resolveBookProgress(book));
 
@@ -103,6 +412,9 @@ export function FlipBookReader({
   const [keeperRevealed, setKeeperRevealed] = useState(false);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(() =>
     getCachedPdfCoverSync(book.id, book.sizeBytes)
+  );
+  const [bindingTheme, setBindingTheme] = useState<BookBindingTheme | null>(() =>
+    getCachedBookBindingTheme(book.id, book.sizeBytes)
   );
 
   const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
@@ -123,8 +435,17 @@ export function FlipBookReader({
   const bookRef = useRef(book);
   const onBookUpdateRef = useRef(onBookUpdate);
   const lastPageTapRef = useRef<{ time: number; x: number; y: number; pageNum: number } | null>(null);
+  const lastTapMenuOpenedAtRef = useRef(0);
   const suppressClickUntilRef = useRef(0);
   const spreadSwipeRef = useRef<{ x: number; y: number } | null>(null);
+  const strokeDraftRef = useRef<{
+    pointerId: number;
+    pageNum: number;
+    type: 'mark' | 'circle';
+    points: PageAnnotationPoint[];
+    totalDist: number;
+  } | null>(null);
+  const freshTimersRef = useRef<number[]>([]);
 
   useEffect(() => {
     bookRef.current = book;
@@ -161,6 +482,7 @@ export function FlipBookReader({
     setCoverSettled(false);
     setKeeperRevealed(false);
     setCoverPreviewUrl(getCachedPdfCoverSync(book.id, book.sizeBytes));
+    setBindingTheme(getCachedBookBindingTheme(book.id, book.sizeBytes));
 
     let cancelled = false;
     if (!getCachedPdfCoverSync(book.id, book.sizeBytes)) {
@@ -206,6 +528,10 @@ export function FlipBookReader({
   useEffect(() => {
     if (closing) {
       setFocusAnchor(null);
+      setTapMenu(null);
+      setActivePenTool(null);
+      setDraftStroke(null);
+      strokeDraftRef.current = null;
     }
   }, [closing]);
 
@@ -272,6 +598,7 @@ export function FlipBookReader({
     hasInteractedRef.current = false;
     pendingCommittedPageRef.current = null;
     setProgress(initialProgress);
+    setAnnotations(loadBookAnnotations(bookRef.current.id));
     setLoadingDoc(true);
     setDocError(null);
     setNumPages(0);
@@ -280,6 +607,10 @@ export function FlipBookReader({
     setPageImages({});
     setHiResImages({});
     setFocusAnchor(null);
+    setTapMenu(null);
+    setActivePenTool(null);
+    setDraftStroke(null);
+    strokeDraftRef.current = null;
     setPageErrors({});
     setJumpValue('1');
     renderedSetRef.current = new Set();
@@ -528,14 +859,13 @@ export function FlipBookReader({
     [book.id, numPages, persistProgressToServer]
   );
 
-  const openPageFocus = useCallback(
-    (pageNum: number, clientX: number, clientY: number, containerEl: HTMLElement) => {
+  const openPageFocusAtNormalized = useCallback(
+    (pageNum: number, rx: number, ry: number) => {
       if (pageNum < 1 || pageNum > numPages) return;
       if (clickTimerRef.current !== null) {
         window.clearTimeout(clickTimerRef.current);
         clickTimerRef.current = null;
       }
-      const { rx, ry } = computeImageNormalizedPoint(containerEl, clientX, clientY);
       void renderPdfPage(pageNum);
       void renderHiResPage(pageNum);
       hasInteractedRef.current = true;
@@ -545,9 +875,131 @@ export function FlipBookReader({
     [commitPageProgress, numPages, renderHiResPage, renderPdfPage]
   );
 
+  const openTapOptionsMenu = useCallback(
+    (pageNum: number, clientX: number, clientY: number, containerEl: HTMLElement) => {
+      if (pageNum < 1 || pageNum > numPages) return;
+      if (clickTimerRef.current !== null) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      const now = performance.now();
+      if (now - lastTapMenuOpenedAtRef.current < 220) {
+        return;
+      }
+      lastTapMenuOpenedAtRef.current = now;
+      const { rx, ry } = computeImageNormalizedPoint(containerEl, clientX, clientY);
+      setTapMenu({
+        pageNum,
+        rx,
+        ry,
+        screenX: clientX,
+        screenY: clientY,
+      });
+    },
+    [numPages]
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const timer of freshTimersRef.current) {
+        window.clearTimeout(timer);
+      }
+      freshTimersRef.current = [];
+    };
+  }, []);
+
+  const markFreshAnnotation = useCallback((id: string) => {
+    setFreshAnnotationIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    const timer = window.setTimeout(() => {
+      setFreshAnnotationIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }, 820);
+    freshTimersRef.current.push(timer);
+  }, []);
+
+  const toggleAnnotationAtPoint = useCallback(
+    (type: 'mark' | 'circle', pageNum: number, rx: number, ry: number) => {
+      let addedId: string | null = null;
+      setAnnotations((prev) => {
+        const existingIndex = prev.findIndex(
+          (item) =>
+            !item.points &&
+            item.pageNum === pageNum &&
+            item.type === type &&
+            Math.hypot(item.rx - rx, item.ry - ry) < 0.055
+        );
+        if (existingIndex >= 0) {
+          const next = prev.filter((_, idx) => idx !== existingIndex);
+          saveBookAnnotations(book.id, next);
+          return next;
+        }
+        addedId = `${type}-${pageNum}-${Date.now().toString(36)}-${Math.random()
+          .toString(36)
+          .slice(2, 6)}`;
+        const next = [
+          ...prev,
+          {
+            id: addedId,
+            pageNum,
+            type,
+            rx,
+            ry,
+          },
+        ];
+        saveBookAnnotations(book.id, next);
+        return next;
+      });
+      if (addedId) {
+        markFreshAnnotation(addedId);
+      }
+    },
+    [book.id, markFreshAnnotation]
+  );
+
+  const addFreehandAnnotation = useCallback(
+    (type: 'mark' | 'circle', pageNum: number, points: PageAnnotationPoint[]) => {
+      if (points.length < 2) return;
+      const sum = points.reduce(
+        (acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }),
+        { x: 0, y: 0 }
+      );
+      const rx = sum.x / points.length;
+      const ry = sum.y / points.length;
+      const id = `${type}-stroke-${pageNum}-${Date.now().toString(36)}-${Math.random()
+        .toString(36)
+        .slice(2, 6)}`;
+      setAnnotations((prev) => {
+        const next = [...prev, { id, pageNum, type, rx, ry, points }];
+        saveBookAnnotations(book.id, next);
+        return next;
+      });
+      markFreshAnnotation(id);
+    },
+    [book.id, markFreshAnnotation]
+  );
+
+  const removeAnnotationById = useCallback(
+    (id: string) => {
+      setAnnotations((prev) => {
+        const next = prev.filter((item) => item.id !== id);
+        saveBookAnnotations(book.id, next);
+        return next;
+      });
+    },
+    [book.id]
+  );
+
   const handlePageTapPointerUp = useCallback(
     (pageNum: number, e: React.PointerEvent<HTMLElement>) => {
-      if (e.pointerType !== 'touch' || pageNum < 1 || pageNum > numPages) return;
+      if (activePenTool !== null || e.pointerType !== 'touch' || pageNum < 1 || pageNum > numPages) return;
       const now = performance.now();
       const prev = lastPageTapRef.current;
       if (
@@ -558,12 +1010,77 @@ export function FlipBookReader({
       ) {
         lastPageTapRef.current = null;
         suppressClickUntilRef.current = now + 420;
-        openPageFocus(pageNum, e.clientX, e.clientY, e.currentTarget);
+        openTapOptionsMenu(pageNum, e.clientX, e.clientY, e.currentTarget);
       } else {
         lastPageTapRef.current = { time: now, x: e.clientX, y: e.clientY, pageNum };
       }
     },
-    [numPages, openPageFocus]
+    [activePenTool, numPages, openTapOptionsMenu]
+  );
+
+  const handlePageSurfacePointerDown = useCallback(
+    (pageNum: number, e: React.PointerEvent<HTMLElement>) => {
+      if (!activePenTool || pageNum < 1 || pageNum > numPages) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.stopPropagation();
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore capture failure
+      }
+      const { rx, ry } = computeImageNormalizedPoint(e.currentTarget, e.clientX, e.clientY);
+      const firstPt: PageAnnotationPoint = { x: rx, y: ry };
+      strokeDraftRef.current = {
+        pointerId: e.pointerId,
+        pageNum,
+        type: activePenTool,
+        points: [firstPt],
+        totalDist: 0,
+      };
+      setDraftStroke({ pageNum, type: activePenTool, points: [firstPt] });
+    },
+    [activePenTool, numPages]
+  );
+
+  const handlePageSurfacePointerMove = useCallback(
+    (pageNum: number, e: React.PointerEvent<HTMLElement>) => {
+      const draft = strokeDraftRef.current;
+      if (!draft || draft.pointerId !== e.pointerId || draft.pageNum !== pageNum) return;
+      const { rx, ry } = computeImageNormalizedPoint(e.currentTarget, e.clientX, e.clientY);
+      const prev = draft.points[draft.points.length - 1];
+      const seg = Math.hypot(rx - prev.x, ry - prev.y);
+      if (seg < 0.004) return;
+      draft.points.push({ x: rx, y: ry });
+      draft.totalDist += seg;
+      setDraftStroke({ pageNum, type: draft.type, points: [...draft.points] });
+    },
+    []
+  );
+
+  const handlePageSurfacePointerUp = useCallback(
+    (pageNum: number, e: React.PointerEvent<HTMLElement>) => {
+      const draft = strokeDraftRef.current;
+      if (draft && draft.pointerId === e.pointerId) {
+        e.stopPropagation();
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+        strokeDraftRef.current = null;
+        setDraftStroke(null);
+        suppressClickUntilRef.current = performance.now() + 360;
+        if (draft.totalDist < 0.022 || draft.points.length < 2) {
+          const origin = draft.points[0];
+          if (origin) {
+            toggleAnnotationAtPoint(draft.type, pageNum, origin.x, origin.y);
+          }
+        } else {
+          addFreehandAnnotation(draft.type, pageNum, draft.points);
+        }
+        return;
+      }
+      handlePageTapPointerUp(pageNum, e);
+    },
+    [addFreehandAnnotation, handlePageTapPointerUp, toggleAnnotationAtPoint]
   );
 
   useEffect(() => {
@@ -682,6 +1199,7 @@ export function FlipBookReader({
 
   const turnNext = useCallback(() => {
     if (currentSpread >= totalLeaves) return;
+    setTapMenu(null);
     hasInteractedRef.current = true;
     const turningLeaf = currentSpread;
     setActiveFlipLeaf(turningLeaf);
@@ -692,6 +1210,7 @@ export function FlipBookReader({
 
   const turnPrev = useCallback(() => {
     if (currentSpread <= 0) return;
+    setTapMenu(null);
     hasInteractedRef.current = true;
     const turningLeaf = currentSpread - 1;
     setActiveFlipLeaf(turningLeaf);
@@ -706,6 +1225,12 @@ export function FlipBookReader({
       if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) {
         return;
       }
+      if (e.key === 'Escape' && activePenTool && !tapMenu && !focusAnchor) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setActivePenTool(null);
+        return;
+      }
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         turnNext();
@@ -716,7 +1241,7 @@ export function FlipBookReader({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [turnNext, turnPrev]);
+  }, [activePenTool, focusAnchor, tapMenu, turnNext, turnPrev]);
 
   function handleJumpSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -789,11 +1314,18 @@ export function FlipBookReader({
     }
     if (pageImages[pageNum]) {
       return (
-        <img
+        <SpreadPageSurface
           src={pageImages[pageNum]}
           alt={`Page ${pageNum}`}
-          draggable={false}
-          className="w-full h-full object-contain select-none p-2 sm:p-3 cursor-zoom-in"
+          annotations={annotations.filter((item) => item.pageNum === pageNum)}
+          freshIds={freshAnnotationIds}
+          interactiveAnnotations={activePenTool === null}
+          draftStroke={
+            draftStroke && draftStroke.pageNum === pageNum
+              ? { type: draftStroke.type, points: draftStroke.points }
+              : null
+          }
+          onRemoveAnnotation={removeAnnotationById}
         />
       );
     }
@@ -822,17 +1354,33 @@ export function FlipBookReader({
           <p className="mt-1 text-sm text-white/80">{docError}</p>
         </div>
       ) : singleZoom ? (
-        <div className="w-[min(94vw,900px)] h-[min(64dvh,690px)] sm:w-[min(92vw,900px)] sm:h-[min(78dvh,690px)] bg-[#141210] rounded-xl p-2 sm:p-3 shadow-2xl flex flex-col">
+        <div
+          style={
+            bindingTheme
+              ? {
+                  background: `linear-gradient(145deg, ${bindingTheme.boardHi} 0%, ${bindingTheme.boardLo} 100%)`,
+                  boxShadow: `0 25px 50px -12px rgba(0, 0, 0, 0.72), inset 0 1px 0 ${bindingTheme.boardBorder}`,
+                }
+              : undefined
+          }
+          className="w-[min(94vw,900px)] h-[min(64dvh,690px)] sm:w-[min(92vw,900px)] sm:h-[min(78dvh,690px)] bg-[#141210] rounded-xl p-2 sm:p-3 shadow-2xl flex flex-col transition-colors duration-500"
+        >
           <div className="flex-1 overflow-y-auto bg-[#e9e5dc] rounded p-2.5 sm:p-4 space-y-3 sm:space-y-4">
             {zoomedLeftPage ? (
               <div
-                className="relative bg-white shadow mx-auto max-w-2xl cursor-zoom-in"
-                title="Double-click to focus & read"
+                className={`folio-pen-surface relative bg-white shadow mx-auto max-w-2xl ${
+                  activePenTool ? 'touch-none' : ''
+                }`}
+                title={activePenTool ? 'Drag or tap with pen' : 'Double-click for page options'}
                 onDoubleClick={(e) => {
+                  if (activePenTool) return;
                   e.stopPropagation();
-                  openPageFocus(zoomedLeftPage, e.clientX, e.clientY, e.currentTarget);
+                  openTapOptionsMenu(zoomedLeftPage, e.clientX, e.clientY, e.currentTarget);
                 }}
-                onPointerUp={(e) => handlePageTapPointerUp(zoomedLeftPage, e)}
+                onPointerDown={(e) => handlePageSurfacePointerDown(zoomedLeftPage, e)}
+                onPointerMove={(e) => handlePageSurfacePointerMove(zoomedLeftPage, e)}
+                onPointerUp={(e) => handlePageSurfacePointerUp(zoomedLeftPage, e)}
+                onPointerCancel={(e) => handlePageSurfacePointerUp(zoomedLeftPage, e)}
               >
                 {keeperRevealed && displayKeptOnLeft && displayKeptPage !== null ? (
                   <button
@@ -857,12 +1405,25 @@ export function FlipBookReader({
                   </button>
                 ) : null}
                 {pageImages[zoomedLeftPage] ? (
-                  <img
-                    src={pageImages[zoomedLeftPage]}
-                    alt={`Page ${zoomedLeftPage}`}
-                    draggable={false}
-                    className="w-full h-auto block select-none"
-                  />
+                  <>
+                    <img
+                      src={pageImages[zoomedLeftPage]}
+                      alt={`Page ${zoomedLeftPage}`}
+                      draggable={false}
+                      className="w-full h-auto block select-none"
+                    />
+                    <PageAnnotationsLayer
+                      annotations={annotations.filter((item) => item.pageNum === zoomedLeftPage)}
+                      freshIds={freshAnnotationIds}
+                      interactive={activePenTool === null}
+                      draftStroke={
+                        draftStroke && draftStroke.pageNum === zoomedLeftPage
+                          ? { type: draftStroke.type, points: draftStroke.points }
+                          : null
+                      }
+                      onRemove={removeAnnotationById}
+                    />
+                  </>
                 ) : (
                   <div className="py-24 text-center text-xs text-[#78716C]">
                     Rendering Page {zoomedLeftPage}...
@@ -872,13 +1433,19 @@ export function FlipBookReader({
             ) : null}
             {zoomedRightPage ? (
               <div
-                className="relative bg-white shadow mx-auto max-w-2xl cursor-zoom-in"
-                title="Double-click to focus & read"
+                className={`folio-pen-surface relative bg-white shadow mx-auto max-w-2xl ${
+                  activePenTool ? 'touch-none' : ''
+                }`}
+                title={activePenTool ? 'Drag or tap with pen' : 'Double-click for page options'}
                 onDoubleClick={(e) => {
+                  if (activePenTool) return;
                   e.stopPropagation();
-                  openPageFocus(zoomedRightPage, e.clientX, e.clientY, e.currentTarget);
+                  openTapOptionsMenu(zoomedRightPage, e.clientX, e.clientY, e.currentTarget);
                 }}
-                onPointerUp={(e) => handlePageTapPointerUp(zoomedRightPage, e)}
+                onPointerDown={(e) => handlePageSurfacePointerDown(zoomedRightPage, e)}
+                onPointerMove={(e) => handlePageSurfacePointerMove(zoomedRightPage, e)}
+                onPointerUp={(e) => handlePageSurfacePointerUp(zoomedRightPage, e)}
+                onPointerCancel={(e) => handlePageSurfacePointerUp(zoomedRightPage, e)}
               >
                 {keeperRevealed && displayKeptOnRight && displayKeptPage !== null ? (
                   <button
@@ -903,12 +1470,25 @@ export function FlipBookReader({
                   </button>
                 ) : null}
                 {pageImages[zoomedRightPage] ? (
-                  <img
-                    src={pageImages[zoomedRightPage]}
-                    alt={`Page ${zoomedRightPage}`}
-                    draggable={false}
-                    className="w-full h-auto block select-none"
-                  />
+                  <>
+                    <img
+                      src={pageImages[zoomedRightPage]}
+                      alt={`Page ${zoomedRightPage}`}
+                      draggable={false}
+                      className="w-full h-auto block select-none"
+                    />
+                    <PageAnnotationsLayer
+                      annotations={annotations.filter((item) => item.pageNum === zoomedRightPage)}
+                      freshIds={freshAnnotationIds}
+                      interactive={activePenTool === null}
+                      draftStroke={
+                        draftStroke && draftStroke.pageNum === zoomedRightPage
+                          ? { type: draftStroke.type, points: draftStroke.points }
+                          : null
+                      }
+                      onRemove={removeAnnotationById}
+                    />
+                  </>
                 ) : (
                   <div className="py-24 text-center text-xs text-[#78716C]">
                     Rendering Page {zoomedRightPage}...
@@ -920,8 +1500,13 @@ export function FlipBookReader({
         </div>
       ) : (
         <div
+          style={getBookBindingCssVars(bindingTheme)}
           className={`bookWrapper ${coverOpened ? 'is-spread-open' : ''}`}
           onTouchStart={(e) => {
+            if (activePenTool !== null) {
+              spreadSwipeRef.current = null;
+              return;
+            }
             if (e.touches.length === 1) {
               spreadSwipeRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
             } else {
@@ -929,6 +1514,10 @@ export function FlipBookReader({
             }
           }}
           onTouchEnd={(e) => {
+            if (activePenTool !== null) {
+              spreadSwipeRef.current = null;
+              return;
+            }
             const start = spreadSwipeRef.current;
             spreadSwipeRef.current = null;
             if (!start || e.changedTouches.length !== 1) return;
@@ -998,7 +1587,7 @@ export function FlipBookReader({
                           key={k}
                           style={{ zIndex }}
                           onClick={(e) => {
-                            if (performance.now() < suppressClickUntilRef.current) {
+                            if (activePenTool !== null || performance.now() < suppressClickUntilRef.current) {
                               return;
                             }
                             if (e.detail >= 2) {
@@ -1023,14 +1612,17 @@ export function FlipBookReader({
                           className={`flip-page ${isFlipped ? 'is-flipped' : 'is-right'}`}
                         >
                           <div
-                            className="pageFace front"
+                            className={`pageFace front folio-pen-surface ${activePenTool ? 'touch-none' : ''}`}
                             onDoubleClick={(e) => {
-                              if (frontPageNum <= numPages) {
+                              if (activePenTool === null && frontPageNum <= numPages) {
                                 e.stopPropagation();
-                                openPageFocus(frontPageNum, e.clientX, e.clientY, e.currentTarget);
+                                openTapOptionsMenu(frontPageNum, e.clientX, e.clientY, e.currentTarget);
                               }
                             }}
-                            onPointerUp={(e) => handlePageTapPointerUp(frontPageNum, e)}
+                            onPointerDown={(e) => handlePageSurfacePointerDown(frontPageNum, e)}
+                            onPointerMove={(e) => handlePageSurfacePointerMove(frontPageNum, e)}
+                            onPointerUp={(e) => handlePageSurfacePointerUp(frontPageNum, e)}
+                            onPointerCancel={(e) => handlePageSurfacePointerUp(frontPageNum, e)}
                           >
                             {renderPageContent(frontPageNum, 'Blank Endpaper')}
                             <span className="absolute bottom-2 right-3 text-[10px] font-mono tabular-nums text-[#78716C]/80 pointer-events-none">
@@ -1040,14 +1632,17 @@ export function FlipBookReader({
                           </div>
 
                           <div
-                            className="pageFace back"
+                            className={`pageFace back folio-pen-surface ${activePenTool ? 'touch-none' : ''}`}
                             onDoubleClick={(e) => {
-                              if (backPageNum <= numPages) {
+                              if (activePenTool === null && backPageNum <= numPages) {
                                 e.stopPropagation();
-                                openPageFocus(backPageNum, e.clientX, e.clientY, e.currentTarget);
+                                openTapOptionsMenu(backPageNum, e.clientX, e.clientY, e.currentTarget);
                               }
                             }}
-                            onPointerUp={(e) => handlePageTapPointerUp(backPageNum, e)}
+                            onPointerDown={(e) => handlePageSurfacePointerDown(backPageNum, e)}
+                            onPointerMove={(e) => handlePageSurfacePointerMove(backPageNum, e)}
+                            onPointerUp={(e) => handlePageSurfacePointerUp(backPageNum, e)}
+                            onPointerCancel={(e) => handlePageSurfacePointerUp(backPageNum, e)}
                           >
                             {renderPageContent(backPageNum, 'End of Volume')}
                             <span className="absolute bottom-2 left-3 text-[10px] font-mono tabular-nums text-[#78716C]/80 pointer-events-none">
@@ -1067,11 +1662,24 @@ export function FlipBookReader({
                       coverFading ? 'is-settled' : ''
                     }`}
                   >
-                    <div className="pageFace front cover-sheen bg-[#22252d] flex items-center justify-center border-l border-black/40 rounded-r-[10px]">
+                    <div
+                      style={bindingTheme ? { backgroundColor: bindingTheme.coverBg } : undefined}
+                      className="pageFace front cover-sheen bg-[#22252d] flex items-center justify-center border-l border-black/40 rounded-r-[10px]"
+                    >
                       {book.coverPath || coverPreviewUrl || pageImages[1] ? (
                         <img
                           src={book.coverPath || coverPreviewUrl || pageImages[1] || ''}
                           alt=""
+                          onLoad={(e) => {
+                            if (!bindingTheme) {
+                              const extracted = extractBookBindingThemeFromImage(
+                                e.currentTarget,
+                                book.id,
+                                book.sizeBytes
+                              );
+                              if (extracted) setBindingTheme(extracted);
+                            }
+                          }}
                           className="w-full h-full object-cover object-top"
                         />
                       ) : (
@@ -1249,6 +1857,41 @@ export function FlipBookReader({
               </button>
             ) : null}
 
+            <div
+              role="group"
+              aria-label="Fountain pen tools"
+              className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md bg-black/45 border border-white/10 backdrop-blur-md"
+            >
+              <button
+                type="button"
+                aria-pressed={activePenTool === 'mark'}
+                onClick={() => setActivePenTool((prev) => (prev === 'mark' ? null : 'mark'))}
+                title={activePenTool === 'mark' ? 'Exit Mark pen' : 'Arm Mark highlighter pen'}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border transition-colors whitespace-nowrap cursor-pointer ${
+                  activePenTool === 'mark'
+                    ? 'bg-amber-400/20 border-amber-300/60 text-amber-200'
+                    : 'border-transparent text-white/75 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <Highlighter className="w-3.5 h-3.5 text-amber-300" />
+                <span>Mark</span>
+              </button>
+              <button
+                type="button"
+                aria-pressed={activePenTool === 'circle'}
+                onClick={() => setActivePenTool((prev) => (prev === 'circle' ? null : 'circle'))}
+                title={activePenTool === 'circle' ? 'Exit Circle pen' : 'Arm Circle ink pen'}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border transition-colors whitespace-nowrap cursor-pointer ${
+                  activePenTool === 'circle'
+                    ? 'bg-rose-500/25 border-rose-300/60 text-rose-200'
+                    : 'border-transparent text-white/75 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <Circle className="w-3.5 h-3.5 text-rose-300" />
+                <span>Circle</span>
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={() => setSingleZoom((prev) => !prev)}
@@ -1272,6 +1915,33 @@ export function FlipBookReader({
         </div>
       ) : null}
 
+      <FolioPenCursor
+        active={!closing && !docError && numPages > 0 && !tapMenu}
+        mode={activePenTool ?? 'read'}
+      />
+
+      {tapMenu && numPages > 0 ? (
+        <DoubleTapFabMenu
+          anchor={tapMenu}
+          onClose={() => setTapMenu(null)}
+          onZoom={() => {
+            const target = tapMenu;
+            setTapMenu(null);
+            openPageFocusAtNormalized(target.pageNum, target.rx, target.ry);
+          }}
+          onMark={() => {
+            const target = tapMenu;
+            setTapMenu(null);
+            toggleAnnotationAtPoint('mark', target.pageNum, target.rx, target.ry);
+          }}
+          onCircle={() => {
+            const target = tapMenu;
+            setTapMenu(null);
+            toggleAnnotationAtPoint('circle', target.pageNum, target.rx, target.ry);
+          }}
+        />
+      ) : null}
+
       {focusAnchor && numPages > 0 ? (
         <FocusedPageOverlay
           anchor={focusAnchor}
@@ -1281,6 +1951,13 @@ export function FlipBookReader({
           pageErrors={pageErrors}
           keptPage={displayKeptPage ?? keptPage}
           keeperColor={activeKeeperColor}
+          annotations={annotations.filter((item) => item.pageNum === focusAnchor.pageNum)}
+          freshIds={freshAnnotationIds}
+          activePenTool={activePenTool}
+          onChangePenTool={setActivePenTool}
+          onAddStamp={toggleAnnotationAtPoint}
+          onAddStroke={addFreehandAnnotation}
+          onRemoveAnnotation={removeAnnotationById}
           onToggleBookmark={(pageNum) => toggleBookKeeperAtPage(pageNum)}
           onSelectKeeperColor={(color, pageNum) => selectKeeperColorAtPage(color, pageNum)}
           onRequestHiRes={(pageNum) => {

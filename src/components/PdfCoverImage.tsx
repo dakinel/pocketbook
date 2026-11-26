@@ -1,5 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { getCachedPdfCoverSync, getOrRenderPdfCover } from '../utils/pdfCoverCache.ts';
+import {
+  extractBookBindingThemeFromImage,
+  getCachedBookBindingTheme,
+  type BookBindingTheme,
+} from '../utils/coverColorTheme.ts';
 
 interface PdfCoverImageProps {
   bookId: string;
@@ -10,6 +15,7 @@ interface PdfCoverImageProps {
   inView?: boolean;
   rattleTrigger?: number;
   onLockedChange?: (locked: boolean) => void;
+  onBindingTheme?: (theme: BookBindingTheme) => void;
   className?: string;
 }
 
@@ -470,6 +476,7 @@ export function PdfCoverImage({
   inView = true,
   rattleTrigger = 0,
   onLockedChange,
+  onBindingTheme,
   className = '',
 }: PdfCoverImageProps) {
   const serverCoverUrl = `/api/vault/${encodeURIComponent(bookId)}/cover?v=5-${sizeBytes}`;
@@ -504,6 +511,19 @@ export function PdfCoverImage({
   const [breaking, setBreaking] = useState(false);
   const [rattling, setRattling] = useState(false);
   const wasReadyRef = useRef(imageReady);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const onBindingThemeRef = useRef(onBindingTheme);
+
+  useEffect(() => {
+    onBindingThemeRef.current = onBindingTheme;
+  }, [onBindingTheme]);
+
+  useEffect(() => {
+    const cachedTheme = getCachedBookBindingTheme(bookId, sizeBytes);
+    if (cachedTheme) {
+      onBindingThemeRef.current?.(cachedTheme);
+    }
+  }, [bookId, sizeBytes]);
 
   useEffect(() => {
     onLockedChange?.(!imageReady);
@@ -587,6 +607,7 @@ export function PdfCoverImage({
     <div className={`w-full h-full relative bg-[#0c1619] ${className}`}>
       {shouldRenderImg ? (
         <img
+          ref={imgRef}
           src={activeSrc!}
           alt={title}
           loading={priority ? 'eager' : 'lazy'}
@@ -598,6 +619,10 @@ export function PdfCoverImage({
             const finish = () => {
               if (!img.isConnected || img.naturalWidth === 0) return;
               if (src) rememberUrl(loadedCoverUrls, src);
+              const theme = extractBookBindingThemeFromImage(img, bookId, sizeBytes);
+              if (theme) {
+                onBindingThemeRef.current?.(theme);
+              }
               if (!wasReadyRef.current) {
                 wasReadyRef.current = true;
                 setBreaking(true);

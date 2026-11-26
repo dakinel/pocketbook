@@ -10,16 +10,20 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Circle,
   Contrast,
+  Highlighter,
   Loader2,
   Maximize2,
   Minimize2,
   Minus,
   NotebookPen,
+  PenTool,
   Plus,
   RotateCcw,
   Trash2,
   X,
+  ZoomIn,
 } from 'lucide-react';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -57,9 +61,24 @@ export interface VaultBook {
   lastReadAt?: string | null;
 }
 
+/**
+ * FolioVaultPlugin — Self-contained 1-file 3D floating books library + flip-book reader.
+ *
+ * External Project Migration (copy only this file, e.g. src/FolioVaultPlugin.tsx):
+ *   1. Install peer dependencies:
+ *      npm install three pdfjs-dist lucide-react
+ *   2. Render anywhere (all CSS, Three.js shader backdrop, 60-book catalog,
+ *      cover-matched 3D spines/backs/boards, Book Keepers, and PDF reader are self-contained):
+ *      - Connected to your Vault backend (recommended for cached covers & Range PDF proxy):
+ *        <FolioVaultPlugin apiBaseUrl="https://your-folio-vault-url" />
+ *      - Standalone client-only mode:
+ *        <FolioVaultPlugin />
+ */
 export interface FolioVaultPluginProps {
   /** Optional base URL of a Folio Vault server (e.g. "https://example.com"). Defaults to relative "/api/vault". */
   apiBaseUrl?: string;
+  /** Optional base URL for PDF.js cmaps/wasm/standard_fonts/iccs. Auto-detects "/pdfjs/" and falls back to jsDelivr CDN. */
+  pdfAssetsBaseUrl?: string;
   /** Optional explicit book catalog override. When omitted, fetches from apiBaseUrl and falls back to FOLIO_VAULT_BOOKS. */
   books?: VaultBook[];
   /** Render the Three.js floating 3D books shader backdrop behind the shelves. Defaults to true. */
@@ -1140,18 +1159,18 @@ export const FOLIO_VAULT_PLUGIN_CSS = `
 .air-book-shadow-plane { position: absolute; inset: 8% -12% -14% 8%; transform: translateZ(calc(var(--half-d) * -1 - 26px)); background: radial-gradient(ellipse at 48% 52%, rgba(0, 0, 0, 0.56) 0%, rgba(0, 0, 0, 0.24) 50%, transparent 74%); pointer-events: none; transition: transform 0.36s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.36s ease; }
 @media (hover: hover) { .air-book-slot:hover .air-book-shadow-plane, .air-book-slot:focus-within .air-book-shadow-plane { transform: translateZ(calc(var(--half-d) * -1 - 48px)) scale(1.08); opacity: 0.85; } }
 .air-book-pages { position: absolute; top: 4px; right: 4px; width: var(--page-d); height: calc(100% - 8px); transform-origin: right center; transform: translate3d(0, 0, var(--half-page-d)) rotateY(90deg); background: linear-gradient(90deg, rgba(16, 28, 30, 0.32) 0%, transparent 16%, transparent 84%, rgba(16, 28, 30, 0.28) 100%), repeating-linear-gradient(90deg, #f2ede0 0px, #f2ede0 1.5px, #d6ccb8 1.5px, #d6ccb8 3px); box-shadow: inset 0 5px 7px rgba(14, 28, 30, 0.24), inset 0 -5px 7px rgba(14, 28, 30, 0.22); pointer-events: none; }
-.air-book-spine { position: absolute; top: 0; left: 0; width: var(--book-d); height: 100%; transform-origin: left center; transform: translate3d(0, 0, calc(var(--half-d) * -1)) rotateY(-90deg); background: linear-gradient(90deg, #17272b 0%, #37555b 30%, #243b40 72%, #132124 100%); border-radius: 3px 0 0 3px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), inset 0 2px 0 rgba(255, 255, 255, 0.22), inset 0 -2px 0 rgba(0, 0, 0, 0.45); pointer-events: none; }
-.air-book-spine::before, .air-book-spine::after { content: ''; position: absolute; left: 2px; right: 2px; height: 5px; background: linear-gradient(180deg, rgba(226, 236, 236, 0.36) 0%, rgba(16, 28, 30, 0.55) 100%); border-radius: 1px; }
+.air-book-spine { position: absolute; top: 0; left: 0; width: var(--book-d); height: 100%; transform-origin: left center; transform: translate3d(0, 0, calc(var(--half-d) * -1)) rotateY(-90deg); background: linear-gradient(90deg, var(--book-spine-edge, #17272b) 0%, var(--book-spine-hi, #37555b) 30%, var(--book-spine-mid, #243b40) 72%, var(--book-spine-deep, #132124) 100%); border-radius: 3px 0 0 3px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), inset 0 2px 0 rgba(255, 255, 255, 0.22), inset 0 -2px 0 rgba(0, 0, 0, 0.45); transition: background 0.45s ease; pointer-events: none; }
+.air-book-spine::before, .air-book-spine::after { content: ''; position: absolute; left: 2px; right: 2px; height: 5px; background: linear-gradient(180deg, var(--book-band-hi, rgba(226, 236, 236, 0.36)) 0%, var(--book-band-lo, rgba(16, 28, 30, 0.55)) 100%); border-radius: 1px; }
 .air-book-spine::before { top: 15%; }
 .air-book-spine::after { bottom: 15%; }
 .air-book-top { position: absolute; left: 4px; top: 4px; width: calc(100% - 8px); height: var(--page-d); transform-origin: center top; transform: translate3d(0, 0, var(--half-page-d)) rotateX(90deg); background: linear-gradient(180deg, rgba(16, 28, 30, 0.32) 0%, transparent 18%, transparent 82%, rgba(16, 28, 30, 0.28) 100%), repeating-linear-gradient(180deg, #f2ede0 0px, #f2ede0 1.5px, #d6ccb8 1.5px, #d6ccb8 3px); box-shadow: inset -5px 0 7px rgba(14, 28, 30, 0.22); pointer-events: none; }
 .air-book-bottom { position: absolute; left: 4px; bottom: 4px; width: calc(100% - 8px); height: var(--page-d); transform-origin: center bottom; transform: translate3d(0, 0, var(--half-page-d)) rotateX(-90deg); background: linear-gradient(180deg, rgba(16, 28, 30, 0.28) 0%, transparent 18%, transparent 82%, rgba(16, 28, 30, 0.34) 100%), repeating-linear-gradient(180deg, #e6dfd0 0px, #e6dfd0 1.5px, #c9bfab 1.5px, #c9bfab 3px); box-shadow: inset -5px 0 7px rgba(14, 28, 30, 0.26); pointer-events: none; }
-.air-book-back { position: absolute; inset: 0; border-radius: 6px 3px 3px 6px; transform: translateZ(calc(var(--half-d) * -1)) rotateY(180deg); background: linear-gradient(155deg, #2b4146 0%, #162529 100%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 20px 38px rgba(0, 0, 0, 0.48); pointer-events: none; }
+.air-book-back { position: absolute; inset: 0; border-radius: 6px 3px 3px 6px; transform: translateZ(calc(var(--half-d) * -1)) rotateY(180deg); background: linear-gradient(155deg, var(--book-back-hi, #2b4146) 0%, var(--book-back-lo, #162529) 100%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 20px 38px rgba(0, 0, 0, 0.48); transition: background 0.45s ease; pointer-events: none; }
 .air-book-keeper-wrap { position: absolute; right: 17%; top: -7px; bottom: -27px; width: 24px; transform: translateZ(calc(var(--half-d) - 7px)); transform-style: preserve-3d; pointer-events: none; transition: transform 0.36s cubic-bezier(0.22, 1, 0.36, 1); }
 .air-book-keeper { width: 100%; height: 100%; background: linear-gradient(90deg, var(--keeper-edge, #7f1d1d) 0%, var(--keeper-hi, #dc2626) 36%, var(--keeper-mid, #b91c1c) 74%, var(--keeper-edge, #7f1d1d) 100%); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 93%, 0 100%); box-shadow: inset 0 1px 0 var(--keeper-sheen, rgba(255, 220, 220, 0.35)), 0 8px 16px rgba(0, 0, 0, 0.45); display: flex; align-items: flex-end; justify-content: center; padding-bottom: 10px; transform-origin: 50% 76%; transform: translate3d(0, calc(var(--keeper-swing, 0) * 2.2px), 0) rotateX(calc(var(--keeper-swing, 0) * -13deg)) rotateZ(calc(var(--keeper-swing, 0) * var(--keeper-sway-dir, 1) * 5deg)); will-change: transform; pointer-events: none; }
 .air-book-keeper-label { font-family: var(--font-mono, ui-monospace, monospace); font-size: 8.5px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; color: var(--keeper-text, #fff5f5); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65); font-variant-numeric: tabular-nums; }
 @media (hover: hover) { .air-book-slot:hover .air-book-keeper-wrap, .air-book-slot:focus-within .air-book-keeper-wrap { transform: translateZ(calc(var(--half-d) - 5px)) translateY(2px); } }
-.air-book-cover { position: relative; width: 100%; height: 100%; border-radius: 2px 6px 6px 2px; overflow: hidden; transform: translateZ(var(--half-d)); background: #1a282b; box-shadow: inset 10px 0 14px rgba(10, 26, 28, 0.28), inset 2px 0 0 rgba(255, 255, 255, 0.2), inset -2px 0 2px rgba(255, 255, 255, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.18); }
+.air-book-cover { position: relative; width: 100%; height: 100%; border-radius: 2px 6px 6px 2px; overflow: hidden; transform: translateZ(var(--half-d)); background: var(--book-cover-bg, #1a282b); box-shadow: inset 10px 0 14px rgba(10, 26, 28, 0.28), inset 2px 0 0 rgba(255, 255, 255, 0.2), inset -2px 0 2px rgba(255, 255, 255, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.18); transition: background 0.45s ease; }
 .air-book-cover::before { content: ''; position: absolute; top: 0; bottom: 0; left: 9px; width: 3px; pointer-events: none; z-index: 2; background: linear-gradient(90deg, rgba(0, 0, 0, 0.28) 0%, rgba(255, 255, 255, 0.16) 60%, transparent 100%); }
 .air-book-cover::after { content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 2; background: linear-gradient(118deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.04) 36%, transparent 62%, rgba(10, 26, 28, 0.14) 100%); }
 @keyframes vaultPlateDissolve { 0% { opacity: 1; } 25% { opacity: 0.92; } 100% { opacity: 0; } }
@@ -1192,9 +1211,9 @@ export const FOLIO_VAULT_PLUGIN_CSS = `
 .bookWrapper { width: min(92vw, 1080px); height: min(74dvh, 690px); margin: 0 auto; transform-style: preserve-3d; transform: translateX(-25%) rotateY(6deg); transition: transform 1.05s cubic-bezier(0.22, 1, 0.36, 1); }
 .bookWrapper.is-spread-open { transform: translateX(0) rotateY(0deg); }
 .bookBg { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; }
-.bookBoardLeft { position: absolute; top: 0; left: 0; width: 50%; height: 100%; border-radius: 12px 0 0 12px; background: linear-gradient(145deg, #1b1815 0%, #0d0c0a 100%); box-shadow: -14px 34px 70px rgba(0, 0, 0, 0.72), 0 12px 24px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.14); opacity: 0; transition: opacity 0.34s ease 0.24s; }
+.bookBoardLeft { position: absolute; top: 0; left: 0; width: 50%; height: 100%; border-radius: 12px 0 0 12px; background: linear-gradient(145deg, var(--book-board-hi, #1b1815) 0%, var(--book-board-lo, #0d0c0a) 100%); box-shadow: -14px 34px 70px rgba(0, 0, 0, 0.72), 0 12px 24px rgba(0, 0, 0, 0.55), inset 0 1px 0 var(--book-board-border, rgba(255, 255, 255, 0.14)); opacity: 0; transition: opacity 0.34s ease 0.24s, background 0.45s ease; }
 .bookWrapper.is-spread-open .bookBoardLeft { opacity: 1; }
-.bookBoardRight { position: absolute; top: 0; left: 50%; width: 50%; height: 100%; border-radius: 0 12px 12px 0; background: linear-gradient(145deg, #1b1815 0%, #0d0c0a 100%); box-shadow: 16px 34px 76px rgba(0, 0, 0, 0.8), 0 12px 26px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.14); }
+.bookBoardRight { position: absolute; top: 0; left: 50%; width: 50%; height: 100%; border-radius: 0 12px 12px 0; background: linear-gradient(145deg, var(--book-board-hi, #1b1815) 0%, var(--book-board-lo, #0d0c0a) 100%); box-shadow: 16px 34px 76px rgba(0, 0, 0, 0.8), 0 12px 26px rgba(0, 0, 0, 0.58), inset 0 1px 0 var(--book-board-border, rgba(255, 255, 255, 0.14)); transition: background 0.45s ease; }
 .pageBg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: calc(100% - 24px); height: calc(100% - 24px); border-radius: 2px; }
 .pageWrapper { position: absolute; left: 50%; top: 0; width: 50%; height: 100%; z-index: 5; perspective: 2000px; -webkit-font-smoothing: antialiased; }
 .cover-reveal-leaf { position: absolute; inset: -4px -4px -4px 0; z-index: 95; transform-style: preserve-3d; transform-origin: -2px center; transform: rotateY(0deg); border-radius: 0 10px 10px 0; box-shadow: 8px 20px 36px rgba(0, 0, 0, 0.55), inset 3px 0 6px rgba(255, 255, 255, 0.08); transition: transform 1.05s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.26s ease; pointer-events: none; }
@@ -1219,6 +1238,41 @@ export const FOLIO_VAULT_PLUGIN_CSS = `
 .reader-book-keeper-ribbon { width: 28px; min-height: 54px; padding: 6px 2px 13px; color: var(--keeper-text, #fff5f5); background: linear-gradient(90deg, var(--keeper-edge, #7f1d1d) 0%, var(--keeper-hi, #dc2626) 38%, var(--keeper-mid, #b91c1c) 74%, var(--keeper-edge, #7f1d1d) 100%); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 80%, 0 100%); box-shadow: 0 10px 18px rgba(0, 0, 0, 0.34), inset 0 1px 0 var(--keeper-sheen, rgba(255, 224, 224, 0.35)); transform-origin: top center; transform: translate3d(0, 0, 24px); animation: readerKeeperReveal 0.44s cubic-bezier(0.22, 1, 0.36, 1) both; transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1); }
 .reader-book-keeper-ribbon:hover { transform: translate3d(0, 3px, 24px); }
 .reader-book-keeper-ribbon.is-compact { width: 22px; min-height: 40px; padding: 4px 2px 10px; }
+@media (hover: hover) and (pointer: fine) {
+  .folio-pen-surface, .folio-pen-surface img { cursor: none !important; }
+  .folio-pen-surface button, .folio-pen-surface a, .folio-pen-surface input, .folio-pen-surface [data-pen-ignore] { cursor: pointer !important; }
+}
+.folio-pen-cursor { position: fixed; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 140; opacity: 0; transition: opacity 0.16s ease; will-change: transform, opacity; }
+.folio-pen-rig { transform-origin: 0px 0px; will-change: transform; }
+.folio-pen-shadow { position: absolute; left: -4px; top: -2px; width: 14px; height: 7px; border-radius: 9999px; background: radial-gradient(ellipse at center, rgba(15, 23, 42, 0.42) 0%, transparent 74%); transform-origin: center; will-change: transform, opacity; }
+@keyframes folioFabRipple { 0% { transform: translate(-50%, -50%) scale(0.32); opacity: 0.78; } 100% { transform: translate(-50%, -50%) scale(2.35); opacity: 0; } }
+.folio-fab-container { position: relative; display: inline-block; }
+.folio-fab-ripple { position: absolute; top: 50%; left: 50%; width: 66px; height: 66px; border-radius: 50%; border: 2px solid rgba(243, 198, 119, 0.75); background: radial-gradient(circle, rgba(56, 189, 248, 0.22) 0%, transparent 70%); pointer-events: none; animation: folioFabRipple 0.62s cubic-bezier(0.16, 1, 0.3, 1) forwards; z-index: 1; }
+.folio-fab-button { position: relative; width: 60px; height: 60px; border: 1.5px solid rgba(243, 198, 119, 0.52); padding: 0; background: radial-gradient(circle at 30% 26%, #1f3644 0%, #0d1821 72%, #070e14 100%); color: #f3c677; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.48), 0 0 0 4px rgba(15, 28, 34, 0.28), inset 0 1px 1px rgba(255, 255, 255, 0.22); transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease, border-color 0.2s ease; z-index: 2; }
+.folio-fab-button:hover { transform: scale(1.07); box-shadow: 0 14px 32px rgba(0, 0, 0, 0.56), 0 0 0 5px rgba(243, 198, 119, 0.16), inset 0 1px 1px rgba(255, 255, 255, 0.28); }
+.folio-fab-pen { display: flex; align-items: center; justify-content: center; transform: rotate(-18deg) scale(0.92); transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.2s ease; }
+.folio-fab-container.active .folio-fab-button { background: radial-gradient(circle at 30% 28%, #fffdf8 0%, #f1ece1 100%); border-color: rgba(243, 198, 119, 0.85); color: #0f1b24; box-shadow: 0 14px 34px rgba(0, 0, 0, 0.46), 0 0 22px rgba(243, 198, 119, 0.26); }
+.folio-fab-container.active .folio-fab-pen { transform: rotate(0deg) scale(1); }
+.folio-fab-options { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 3; }
+.folio-fab-option { position: absolute; width: 52px; height: 52px; border: 1px solid rgba(186, 200, 210, 0.65); padding: 0; background: rgba(255, 253, 248, 0.96); border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: #102029; text-decoration: none; cursor: pointer; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.95); opacity: 0; transform: translate(-50%, -50%) scale(0); transition: transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease-out, background 0.14s ease-out, color 0.14s ease-out, border-color 0.14s ease-out, box-shadow 0.14s ease-out; }
+.folio-fab-container.active .folio-fab-option { opacity: 1; pointer-events: auto; }
+.folio-fab-container.active .folio-fab-options .folio-fab-option:nth-child(1) { --offset-x: -64px; --offset-y: -42px; transform: translate(-50%, -50%) translate(var(--offset-x), var(--offset-y)) scale(1); transition-delay: 0.04s; }
+.folio-fab-container.active .folio-fab-options .folio-fab-option:nth-child(2) { --offset-x: 0px; --offset-y: -84px; transform: translate(-50%, -50%) translate(var(--offset-x), var(--offset-y)) scale(1); transition-delay: 0.09s; }
+.folio-fab-container.active .folio-fab-options .folio-fab-option:nth-child(3) { --offset-x: 64px; --offset-y: -42px; transform: translate(-50%, -50%) translate(var(--offset-x), var(--offset-y)) scale(1); transition-delay: 0.14s; }
+.folio-fab-container.active .folio-fab-options .folio-fab-option:hover, .folio-fab-container.active .folio-fab-options .folio-fab-option:focus-visible { transform: translate(-50%, -50%) translate(var(--offset-x), var(--offset-y)) scale(1.12); background: linear-gradient(135deg, #0284c7, #38bdf8); border-color: rgba(186, 230, 253, 0.85); color: #ffffff; box-shadow: 0 12px 26px rgba(14, 165, 233, 0.42); transition-duration: 0.12s; transition-delay: 0s; outline: none; }
+.folio-fab-container.active .folio-fab-options .folio-fab-option.folio-fab-opt-mark:hover, .folio-fab-container.active .folio-fab-options .folio-fab-option.folio-fab-opt-mark:focus-visible { background: linear-gradient(135deg, #d97706, #fbbf24); border-color: rgba(254, 243, 199, 0.9); color: #1c1203; box-shadow: 0 12px 26px rgba(245, 158, 11, 0.44); }
+.folio-fab-container.active .folio-fab-options .folio-fab-option.folio-fab-opt-circle:hover, .folio-fab-container.active .folio-fab-options .folio-fab-option.folio-fab-opt-circle:focus-visible { background: linear-gradient(135deg, #be123c, #f43f5e); border-color: rgba(254, 205, 211, 0.85); color: #ffffff; box-shadow: 0 12px 26px rgba(225, 29, 72, 0.44); }
+@keyframes folioStrokeDraw { 0% { stroke-dashoffset: 100; } 100% { stroke-dashoffset: 0; } }
+@keyframes folioMarkNibSweep { 0% { transform: translate(-6%, 8%) scale(0.92); opacity: 0; } 18% { opacity: 1; } 80% { opacity: 1; } 100% { transform: translate(92%, -6%) scale(0.88); opacity: 0; } }
+@keyframes folioCircleNibOrbit { 0% { transform: translate(16%, 34%) rotate(-8deg); opacity: 0; } 15% { opacity: 1; } 42% { transform: translate(68%, 12%) rotate(10deg); } 68% { transform: translate(86%, 54%) rotate(18deg); } 88% { transform: translate(34%, 84%) rotate(-4deg); opacity: 1; } 100% { transform: translate(18%, 34%) rotate(-12deg); opacity: 0; } }
+.folio-draw-fresh { stroke-dasharray: 100; stroke-dashoffset: 100; animation: folioStrokeDraw 0.56s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.folio-mark-fresh { stroke-dasharray: 100; stroke-dashoffset: 100; animation: folioStrokeDraw 0.44s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.folio-nib-mark-tracer { animation: folioMarkNibSweep 0.52s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.folio-nib-circle-tracer { animation: folioCircleNibOrbit 0.62s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.folio-page-mark { position: absolute; width: 24%; min-width: 46px; height: 3.8%; min-height: 13px; border: 0; padding: 0; background: transparent; mix-blend-mode: multiply; transform: translate(-50%, -50%) rotate(-0.8deg); cursor: pointer; transition: transform 0.15s ease, opacity 0.15s ease; }
+.folio-page-mark:hover { transform: translate(-50%, -50%) rotate(-0.8deg) scale(1.06); opacity: 0.85; }
+.folio-page-circle { position: absolute; width: 15%; min-width: 34px; aspect-ratio: 1 / 1; border: 0; padding: 0; background: transparent; transform: translate(-50%, -50%); cursor: pointer; transition: transform 0.15s ease, opacity 0.15s ease; }
+.folio-page-circle:hover { transform: translate(-50%, -50%) scale(1.07); opacity: 0.85; }
 @media (max-width: 639px) {
   .air-books-stage { gap: 38px 22px; padding: calc(28px + env(safe-area-inset-top, 0px)) 14px calc(68px + env(safe-area-inset-bottom, 0px)); }
   .air-book-slot { --book-w: clamp(104px, 34vw, 146px); --book-d: clamp(30px, 8.5vw, 42px); }
@@ -1232,7 +1286,7 @@ export const FOLIO_VAULT_PLUGIN_CSS = `
 }
 @media (max-height: 520px) and (orientation: landscape) { .bookWrapper { height: min(62dvh, 420px); } }
 @media (prefers-reduced-motion: reduce) {
-  .floating-books-bg, .air-book-slot, .air-book-float, .air-book-body, .vault-plate-breaking, .vault-shockwave-burst, .vault-locker-breaking, .vault-locker-breaking .vault-shackle-group, .vault-chain-breaking .vault-chain-arm, .vault-chain-rattling .vault-chain-arm, .vault-locker-rattling, .vault-locker-rattling .vault-shackle-group, .air-book-slot.is-rattling .air-book-hit, .flip-page, .cover-reveal-leaf, .cover-sheen::after, .book-reveal-stage, .bookWrapper, .bookBoardLeft, .baseLeft, .pageFoldRight, .pageFoldLeft, .reader-book-keeper-ribbon, .air-book-keeper-wrap, .air-book-keeper { transition: none !important; animation: none !important; }
+  .floating-books-bg, .air-book-slot, .air-book-float, .air-book-body, .vault-plate-breaking, .vault-shockwave-burst, .vault-locker-breaking, .vault-locker-breaking .vault-shackle-group, .vault-chain-breaking .vault-chain-arm, .vault-chain-rattling .vault-chain-arm, .vault-locker-rattling, .vault-locker-rattling .vault-shackle-group, .air-book-slot.is-rattling .air-book-hit, .flip-page, .cover-reveal-leaf, .cover-sheen::after, .book-reveal-stage, .bookWrapper, .bookBoardLeft, .baseLeft, .pageFoldRight, .pageFoldLeft, .reader-book-keeper-ribbon, .air-book-keeper-wrap, .air-book-keeper, .folio-fab-container, .folio-fab-button, .folio-fab-pen, .folio-fab-ripple, .folio-fab-option, .folio-draw-fresh, .folio-mark-fresh, .folio-nib-mark-tracer, .folio-nib-circle-tracer, .folio-pen-cursor { transition: none !important; animation: none !important; }
   .air-book-keeper { transform: none !important; }
 }
 `;
@@ -1264,6 +1318,39 @@ function joinApiUrl(apiBaseUrl: string | undefined, path: string): string {
   const base = (apiBaseUrl || '').trim().replace(/\/+$/, '');
   if (!base) return path;
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+function isCrossOriginUrl(url: string | null | undefined): boolean {
+  if (!url || typeof window === 'undefined') return false;
+  if (!/^https?:\/\//i.test(url)) return false;
+  try {
+    return new URL(url, window.location.href).origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+let detectedPdfAssetsBasePromise: Promise<string> | null = null;
+
+function resolvePdfAssetsBase(explicitBase?: string): Promise<string> {
+  const trimmed = (explicitBase || '').trim();
+  if (trimmed) {
+    return Promise.resolve(trimmed.endsWith('/') ? trimmed : `${trimmed}/`);
+  }
+  if (!detectedPdfAssetsBasePromise) {
+    const cdnFallback = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/`;
+    if (typeof window === 'undefined' || typeof fetch !== 'function') {
+      detectedPdfAssetsBasePromise = Promise.resolve('/pdfjs/');
+    } else {
+      detectedPdfAssetsBasePromise = fetch('/pdfjs/cmaps/Identity-H.bcmap', { method: 'HEAD' })
+        .then((res) => {
+          const ct = (res.headers.get('content-type') || '').toLowerCase();
+          return res.ok && !ct.includes('text/html') ? '/pdfjs/' : cdnFallback;
+        })
+        .catch(() => cdnFallback);
+    }
+  }
+  return detectedPdfAssetsBasePromise;
 }
 
 function resolveBookFileUrl(
@@ -1558,6 +1645,347 @@ export function getBookKeeperColor(book: VaultBook): BookKeeperColor {
   return resolveBookKeeperColor(book.id, progress.keeperColor);
 }
 
+export interface BookBindingTheme {
+  primaryHex: string;
+  spineEdge: string;
+  spineHi: string;
+  spineMid: string;
+  spineDeep: string;
+  spineBandHi: string;
+  spineBandLo: string;
+  backHi: string;
+  backLo: string;
+  coverBg: string;
+  boardHi: string;
+  boardLo: string;
+  boardBorder: string;
+}
+
+const BINDING_THEME_CACHE_PREFIX = 'folio-binding-theme-v1:';
+const memoryBindingThemeCache = new Map<string, BookBindingTheme>();
+let sharedThemeSampleCanvas: HTMLCanvasElement | null = null;
+let sharedThemeSampleCtx: CanvasRenderingContext2D | null = null;
+
+function clampBindingNum(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function bindingRgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === rn) h = (gn - bn) / d + (gn < bn ? 6 : 0);
+  else if (max === gn) h = (bn - rn) / d + 2;
+  else h = (rn - gn) / d + 4;
+  return { h: h * 60, s, l };
+}
+
+function bindingHslToRgb(hDeg: number, sPct: number, lPct: number): [number, number, number] {
+  const h = (((hDeg % 360) + 360) % 360) / 360;
+  const s = clampBindingNum(sPct / 100, 0, 1);
+  const l = clampBindingNum(lPct / 100, 0, 1);
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    return [v, v, v];
+  }
+  const hue2rgb = (p: number, q: number, t: number) => {
+    let tt = t;
+    if (tt < 0) tt += 1;
+    if (tt > 1) tt -= 1;
+    if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+    if (tt < 1 / 2) return q;
+    if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [
+    Math.round(hue2rgb(p, q, h + 1 / 3) * 255),
+    Math.round(hue2rgb(p, q, h) * 255),
+    Math.round(hue2rgb(p, q, h - 1 / 3) * 255),
+  ];
+}
+
+function bindingHslToHex(hDeg: number, sPct: number, lPct: number): string {
+  const [r, g, b] = bindingHslToRgb(hDeg, sPct, lPct);
+  const toHex = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function bindingHslToRgba(hDeg: number, sPct: number, lPct: number, alpha: number): string {
+  const [r, g, b] = bindingHslToRgb(hDeg, sPct, lPct);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+export function buildCompatibleBookTheme(hDeg: number, sPct: number, lPct: number): BookBindingTheme {
+  const h = ((hDeg % 360) + 360) % 360;
+  const s = clampBindingNum(sPct, 6, 78);
+  const l = clampBindingNum(lPct, 14, 52);
+  const isWarm = h < 68 || h >= 315;
+  return {
+    primaryHex: bindingHslToHex(h, s, l),
+    spineEdge: bindingHslToHex(h, clampBindingNum(s * 0.96, 8, 78), clampBindingNum(l * 0.48, 7, 26)),
+    spineHi: bindingHslToHex(h, clampBindingNum(s * 0.84, 10, 72), clampBindingNum(l * 1.48, 22, 62)),
+    spineMid: bindingHslToHex(h, clampBindingNum(s * 0.92, 10, 75), clampBindingNum(l * 0.96, 14, 46)),
+    spineDeep: bindingHslToHex(h, clampBindingNum(s * 0.98, 8, 78), clampBindingNum(l * 0.38, 6, 22)),
+    spineBandHi: isWarm
+      ? bindingHslToRgba(42, clampBindingNum(s * 0.55, 18, 48), 84, 0.42)
+      : bindingHslToRgba(h, clampBindingNum(s * 0.42, 14, 38), 86, 0.4),
+    spineBandLo: bindingHslToRgba(h, clampBindingNum(s * 0.85, 12, 62), clampBindingNum(l * 0.25, 5, 14), 0.58),
+    backHi: bindingHslToHex(h, clampBindingNum(s * 0.9, 10, 72), clampBindingNum(l * 1.12, 16, 52)),
+    backLo: bindingHslToHex(h, clampBindingNum(s * 0.95, 8, 76), clampBindingNum(l * 0.52, 8, 28)),
+    coverBg: bindingHslToHex(h, clampBindingNum(s * 0.88, 8, 72), clampBindingNum(l * 0.64, 10, 32)),
+    boardHi: bindingHslToHex(h, clampBindingNum(s * 0.72, 8, 56), clampBindingNum(l * 0.66, 11, 29)),
+    boardLo: bindingHslToHex(h, clampBindingNum(s * 0.78, 6, 60), clampBindingNum(l * 0.34, 6, 16)),
+    boardBorder: bindingHslToRgba(h, clampBindingNum(s * 0.58, 12, 58), clampBindingNum(l * 1.65, 58, 84), 0.24),
+  };
+}
+
+export function getCachedBookBindingTheme(bookId: string, sizeBytes: number): BookBindingTheme | null {
+  const key = `${bookId}:${sizeBytes}`;
+  const mem = memoryBindingThemeCache.get(key);
+  if (mem) return mem;
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(`${BINDING_THEME_CACHE_PREFIX}${key}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<BookBindingTheme>;
+    if (
+      parsed &&
+      typeof parsed.spineHi === 'string' &&
+      typeof parsed.backHi === 'string' &&
+      typeof parsed.boardHi === 'string'
+    ) {
+      const valid = parsed as BookBindingTheme;
+      memoryBindingThemeCache.set(key, valid);
+      return valid;
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+  return null;
+}
+
+function analyzeCoverBindingPixels(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number
+): BookBindingTheme {
+  const NUM_BINS = 12;
+  const binChromaScore = new Float64Array(NUM_BINS);
+  const binWeight = new Float64Array(NUM_BINS);
+  const binR = new Float64Array(NUM_BINS);
+  const binG = new Float64Array(NUM_BINS);
+  const binB = new Float64Array(NUM_BINS);
+  let totalWeight = 0;
+  let totalChromaWeight = 0;
+  let totalL = 0;
+  let totalR = 0;
+  let totalG = 0;
+  let totalB = 0;
+  let spineEdgeWeight = 0;
+  let spineEdgeChromaWeight = 0;
+  let spineEdgeR = 0;
+  let spineEdgeG = 0;
+  let spineEdgeB = 0;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      if (pixels[idx + 3] < 128) continue;
+      const r = pixels[idx];
+      const g = pixels[idx + 1];
+      const b = pixels[idx + 2];
+      const { s, l, h } = bindingRgbToHsl(r, g, b);
+      const isPerimeter = x <= 1 || x >= width - 2 || y <= 1 || y >= height - 2;
+      const isSpineEdge = x <= 2 && y >= 2 && y <= height - 3;
+      const weight = (isPerimeter ? 2.1 : 1.0) * (isSpineEdge ? 1.45 : 1.0);
+      totalWeight += weight;
+      totalL += l * weight;
+      totalR += r * weight;
+      totalG += g * weight;
+      totalB += b * weight;
+      if (isSpineEdge) {
+        spineEdgeWeight += weight;
+        if (s >= 0.16 && l >= 0.08 && l <= 0.88) {
+          spineEdgeChromaWeight += weight;
+          spineEdgeR += r * weight;
+          spineEdgeG += g * weight;
+          spineEdgeB += b * weight;
+        }
+      }
+      if (s >= 0.16 && l >= 0.08 && l <= 0.88) {
+        const bin = Math.floor(((h + 15) % 360) / 30);
+        const midtoneBias = 1 - Math.abs(l - 0.45) * 0.55;
+        const score = weight * (0.4 + s * 1.4) * Math.max(0.35, midtoneBias);
+        binChromaScore[bin] += score;
+        binWeight[bin] += weight;
+        binR[bin] += r * score;
+        binG[bin] += g * score;
+        binB[bin] += b * score;
+        totalChromaWeight += weight;
+      }
+    }
+  }
+
+  if (totalWeight === 0) return buildCompatibleBookTheme(191, 38, 22);
+  const avgL = totalL / totalWeight;
+  const chromaticRatio = totalChromaWeight / totalWeight;
+  const spineEdgeChromaRatio = spineEdgeWeight > 0 ? spineEdgeChromaWeight / spineEdgeWeight : 0;
+
+  let bestBin = 0;
+  let bestScore = -1;
+  for (let i = 0; i < NUM_BINS; i++) {
+    const prev = (i + NUM_BINS - 1) % NUM_BINS;
+    const next = (i + 1) % NUM_BINS;
+    const smoothScore = binChromaScore[i] + (binChromaScore[prev] + binChromaScore[next]) * 0.35;
+    if (smoothScore > bestScore) {
+      bestScore = smoothScore;
+      bestBin = i;
+    }
+  }
+
+  const prevBin = (bestBin + NUM_BINS - 1) % NUM_BINS;
+  const nextBin = (bestBin + 1) % NUM_BINS;
+  const clusterWeight = binWeight[bestBin] + (binWeight[prevBin] + binWeight[nextBin]) * 0.5;
+  const clusterCoverage = clusterWeight / totalWeight;
+
+  if (clusterCoverage >= 0.045 || chromaticRatio >= 0.1 || spineEdgeChromaRatio >= 0.25) {
+    let sumScore = binChromaScore[bestBin];
+    let sumR = binR[bestBin];
+    let sumG = binG[bestBin];
+    let sumB = binB[bestBin];
+    if (binChromaScore[prevBin] > binChromaScore[bestBin] * 0.35) {
+      sumScore += binChromaScore[prevBin] * 0.65;
+      sumR += binR[prevBin] * 0.65;
+      sumG += binG[prevBin] * 0.65;
+      sumB += binB[prevBin] * 0.65;
+    }
+    if (binChromaScore[nextBin] > binChromaScore[bestBin] * 0.35) {
+      sumScore += binChromaScore[nextBin] * 0.65;
+      sumR += binR[nextBin] * 0.65;
+      sumG += binG[nextBin] * 0.65;
+      sumB += binB[nextBin] * 0.65;
+    }
+    if (spineEdgeChromaRatio >= 0.3 && spineEdgeChromaWeight > 0) {
+      const seR = spineEdgeR / spineEdgeChromaWeight;
+      const seG = spineEdgeG / spineEdgeChromaWeight;
+      const seB = spineEdgeB / spineEdgeChromaWeight;
+      const seHsl = bindingRgbToHsl(seR, seG, seB);
+      const cRgb = sumScore > 0 ? [sumR / sumScore, sumG / sumScore, sumB / sumScore] : [seR, seG, seB];
+      const cHsl = bindingRgbToHsl(cRgb[0], cRgb[1], cRgb[2]);
+      const hueDiff = Math.abs(((seHsl.h - cHsl.h + 540) % 360) - 180);
+      if (hueDiff < 45 && sumScore > 0) {
+        const boost = sumScore * 0.35;
+        sumScore += boost;
+        sumR += seR * boost;
+        sumG += seG * boost;
+        sumB += seB * boost;
+      }
+    }
+    if (sumScore > 0) {
+      const hsl = bindingRgbToHsl(sumR / sumScore, sumG / sumScore, sumB / sumScore);
+      const isLightCoverWithAccent = avgL > 0.68;
+      return buildCompatibleBookTheme(
+        hsl.h,
+        isLightCoverWithAccent ? clampBindingNum(hsl.s * 100, 34, 72) : clampBindingNum(hsl.s * 100, 22, 76),
+        isLightCoverWithAccent ? clampBindingNum(hsl.l * 100, 28, 43) : clampBindingNum(hsl.l * 100, 18, 48)
+      );
+    }
+  }
+
+  const avgHsl = bindingRgbToHsl(totalR / totalWeight, totalG / totalWeight, totalB / totalWeight);
+  if (avgL < 0.3) {
+    return buildCompatibleBookTheme(
+      avgHsl.s > 0.04 ? avgHsl.h : 200,
+      clampBindingNum(avgHsl.s * 100, 8, 22),
+      clampBindingNum(avgL * 90 + 6, 15, 25)
+    );
+  }
+  if (avgL > 0.72) {
+    const warmth = (totalR - totalB) / totalWeight;
+    return warmth >= 4
+      ? buildCompatibleBookTheme(34, 18, 38)
+      : buildCompatibleBookTheme(210, 18, 34);
+  }
+  return buildCompatibleBookTheme(
+    avgHsl.s > 0.04 ? avgHsl.h : 204,
+    clampBindingNum(avgHsl.s * 100, 10, 24),
+    clampBindingNum(avgL * 78, 22, 40)
+  );
+}
+
+export function extractBookBindingThemeFromImage(
+  img: HTMLImageElement,
+  bookId: string,
+  sizeBytes: number
+): BookBindingTheme | null {
+  const key = `${bookId}:${sizeBytes}`;
+  const cached = getCachedBookBindingTheme(bookId, sizeBytes);
+  if (cached) return cached;
+  if (typeof document === 'undefined' || !img || !img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) {
+    return null;
+  }
+  if (!sharedThemeSampleCanvas) {
+    sharedThemeSampleCanvas = document.createElement('canvas');
+    sharedThemeSampleCanvas.width = 18;
+    sharedThemeSampleCanvas.height = 24;
+    sharedThemeSampleCtx = sharedThemeSampleCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  if (!sharedThemeSampleCtx) return null;
+  try {
+    sharedThemeSampleCtx.clearRect(0, 0, sharedThemeSampleCanvas.width, sharedThemeSampleCanvas.height);
+    sharedThemeSampleCtx.drawImage(img, 0, 0, sharedThemeSampleCanvas.width, sharedThemeSampleCanvas.height);
+    const data = sharedThemeSampleCtx.getImageData(
+      0,
+      0,
+      sharedThemeSampleCanvas.width,
+      sharedThemeSampleCanvas.height
+    ).data;
+    const theme = analyzeCoverBindingPixels(
+      data,
+      sharedThemeSampleCanvas.width,
+      sharedThemeSampleCanvas.height
+    );
+    memoryBindingThemeCache.set(key, theme);
+    try {
+      window.localStorage.setItem(`${BINDING_THEME_CACHE_PREFIX}${key}`, JSON.stringify(theme));
+    } catch {
+      // Ignore storage quota errors
+    }
+    return theme;
+  } catch {
+    return null;
+  }
+}
+
+export function getBookBindingCssVars(
+  theme?: BookBindingTheme | null
+): React.CSSProperties | undefined {
+  if (!theme) return undefined;
+  return {
+    '--book-spine-edge': theme.spineEdge,
+    '--book-spine-hi': theme.spineHi,
+    '--book-spine-mid': theme.spineMid,
+    '--book-spine-deep': theme.spineDeep,
+    '--book-band-hi': theme.spineBandHi,
+    '--book-band-lo': theme.spineBandLo,
+    '--book-back-hi': theme.backHi,
+    '--book-back-lo': theme.backLo,
+    '--book-cover-bg': theme.coverBg,
+    '--book-board-hi': theme.boardHi,
+    '--book-board-lo': theme.boardLo,
+    '--book-board-border': theme.boardBorder,
+  } as React.CSSProperties;
+}
+
 type VisibilityCallback = (visible: boolean) => void;
 
 const visibilityListeners = new Map<Element, VisibilityCallback>();
@@ -1610,6 +2038,7 @@ interface CoverQueueJob {
   bookId: string;
   pdfUrl: string;
   apiBaseUrl?: string;
+  pdfAssetsBaseUrl?: string;
   hasBackend: boolean;
   resolve: (url: string) => void;
   reject: (err: unknown) => void;
@@ -1724,14 +2153,15 @@ async function isBoilerplateFrontPage(page: pdfjsLib.PDFPageProxy): Promise<bool
   }
 }
 
-async function renderCoverFromPdf(pdfUrl: string): Promise<string> {
+async function renderCoverFromPdf(pdfUrl: string, pdfAssetsBaseUrl?: string): Promise<string> {
+  const assetsBase = await resolvePdfAssetsBase(pdfAssetsBaseUrl);
   const loadingTask = pdfjsLib.getDocument({
     url: pdfUrl,
-    wasmUrl: '/pdfjs/wasm/',
-    cMapUrl: '/pdfjs/cmaps/',
+    wasmUrl: `${assetsBase}wasm/`,
+    cMapUrl: `${assetsBase}cmaps/`,
     cMapPacked: true,
-    standardFontDataUrl: '/pdfjs/standard_fonts/',
-    iccUrl: '/pdfjs/iccs/',
+    standardFontDataUrl: `${assetsBase}standard_fonts/`,
+    iccUrl: `${assetsBase}iccs/`,
     rangeChunkSize: 65536,
     disableAutoFetch: true,
   });
@@ -1823,7 +2253,7 @@ function pumpCoverQueue() {
     const job = coverJobQueue.shift();
     if (!job) break;
     coverActiveWorkers += 1;
-    renderCoverFromPdf(job.pdfUrl)
+    renderCoverFromPdf(job.pdfUrl, job.pdfAssetsBaseUrl)
       .then((dataUrl) => {
         coverMemoryCache.set(job.cacheKey, dataUrl);
         void writeCoverToDb(job.cacheKey, dataUrl);
@@ -1846,7 +2276,7 @@ async function getOrRenderPdfCover(
   bookId: string,
   sizeBytes: number,
   prioritize = false,
-  options?: { pdfUrl?: string; apiBaseUrl?: string; hasBackend?: boolean }
+  options?: { pdfUrl?: string; apiBaseUrl?: string; pdfAssetsBaseUrl?: string; hasBackend?: boolean }
 ): Promise<string> {
   const cacheKey = makeCoverCacheKey(bookId, sizeBytes);
   const mem = coverMemoryCache.get(cacheKey);
@@ -1856,6 +2286,7 @@ async function getOrRenderPdfCover(
   if (existingPromise) return existingPromise;
 
   const apiBaseUrl = options?.apiBaseUrl;
+  const pdfAssetsBaseUrl = options?.pdfAssetsBaseUrl;
   const hasBackend = options?.hasBackend ?? true;
   const pdfUrl =
     options?.pdfUrl || joinApiUrl(apiBaseUrl, `/api/vault/${encodeURIComponent(bookId)}/file`);
@@ -1873,6 +2304,7 @@ async function getOrRenderPdfCover(
         bookId,
         pdfUrl,
         apiBaseUrl,
+        pdfAssetsBaseUrl,
         hasBackend,
         resolve,
         reject,
@@ -3194,11 +3626,13 @@ interface PdfCoverImageProps {
   coverPath?: string | null;
   sourceUrl?: string | null;
   apiBaseUrl?: string;
+  pdfAssetsBaseUrl?: string;
   hasBackend?: boolean;
   priority?: boolean;
   inView?: boolean;
   rattleTrigger?: number;
   onLockedChange?: (locked: boolean) => void;
+  onBindingTheme?: (theme: BookBindingTheme) => void;
   className?: string;
 }
 
@@ -3209,11 +3643,13 @@ export function PdfCoverImage({
   coverPath,
   sourceUrl,
   apiBaseUrl,
+  pdfAssetsBaseUrl,
   hasBackend = true,
   priority = false,
   inView = true,
   rattleTrigger = 0,
   onLockedChange,
+  onBindingTheme,
   className = '',
 }: PdfCoverImageProps) {
   const serverCoverUrl = joinApiUrl(
@@ -3257,6 +3693,18 @@ export function PdfCoverImage({
   const [breaking, setBreaking] = useState(false);
   const [rattling, setRattling] = useState(false);
   const wasReadyRef = useRef(imageReady);
+  const onBindingThemeRef = useRef(onBindingTheme);
+
+  useEffect(() => {
+    onBindingThemeRef.current = onBindingTheme;
+  }, [onBindingTheme]);
+
+  useEffect(() => {
+    const cachedTheme = getCachedBookBindingTheme(bookId, sizeBytes);
+    if (cachedTheme) {
+      onBindingThemeRef.current?.(cachedTheme);
+    }
+  }, [bookId, sizeBytes]);
 
   useEffect(() => {
     onLockedChange?.(!imageReady);
@@ -3320,7 +3768,7 @@ export function PdfCoverImage({
 
     let cancelled = false;
     const pdfUrl = resolveBookFileUrl({ id: bookId, sourceUrl: sourceUrl ?? null }, apiBaseUrl, hasBackend);
-    getOrRenderPdfCover(bookId, sizeBytes, priority, { pdfUrl, apiBaseUrl, hasBackend })
+    getOrRenderPdfCover(bookId, sizeBytes, priority, { pdfUrl, apiBaseUrl, pdfAssetsBaseUrl, hasBackend })
       .then((url) => {
         if (!cancelled) {
           setFallbackUrl(url);
@@ -3333,9 +3781,10 @@ export function PdfCoverImage({
     return () => {
       cancelled = true;
     };
-  }, [hasEnteredView, serverError, hasValidAssetCover, fallbackUrl, bookId, sizeBytes, priority, sourceUrl, apiBaseUrl, hasBackend]);
+  }, [hasEnteredView, serverError, hasValidAssetCover, fallbackUrl, bookId, sizeBytes, priority, sourceUrl, apiBaseUrl, pdfAssetsBaseUrl, hasBackend]);
 
   const shouldRenderImg = Boolean(activeSrc) && (hasEnteredView || imageReady);
+  const useAnonymousCors = activeSrc === serverCoverUrl && isCrossOriginUrl(activeSrc);
 
   return (
     <div className={`w-full h-full relative bg-[#0c1619] ${className}`}>
@@ -3343,6 +3792,7 @@ export function PdfCoverImage({
         <img
           src={activeSrc!}
           alt={title}
+          crossOrigin={useAnonymousCors ? 'anonymous' : undefined}
           loading={priority ? 'eager' : 'lazy'}
           decoding="async"
           fetchPriority={priority ? 'high' : 'auto'}
@@ -3352,6 +3802,10 @@ export function PdfCoverImage({
             const finish = () => {
               if (!img.isConnected || img.naturalWidth === 0) return;
               if (src) rememberCoverUrl(loadedCoverUrls, src);
+              const theme = extractBookBindingThemeFromImage(img, bookId, sizeBytes);
+              if (theme) {
+                onBindingThemeRef.current?.(theme);
+              }
               if (!wasReadyRef.current) {
                 wasReadyRef.current = true;
                 setBreaking(true);
@@ -3390,6 +3844,797 @@ export function PdfCoverImage({
   );
 }
 
+export interface PageAnnotationPoint {
+  x: number;
+  y: number;
+}
+
+export interface PageAnnotation {
+  id: string;
+  pageNum: number;
+  type: 'mark' | 'circle';
+  rx: number;
+  ry: number;
+  points?: PageAnnotationPoint[];
+}
+
+export type PenToolMode = 'mark' | 'circle' | null;
+
+export interface DraftPageStroke {
+  pageNum: number;
+  type: 'mark' | 'circle';
+  points: PageAnnotationPoint[];
+}
+
+function pointsToSmoothSvgPath(points: PageAnnotationPoint[], w = 770, h = 1000): string {
+  if (points.length === 0) return '';
+  if (points.length === 1) {
+    const x = (points[0].x * w).toFixed(1);
+    const y = (points[0].y * h).toFixed(1);
+    return `M ${x} ${y} L ${x} ${y}`;
+  }
+  const pts = points.map((p) => ({ x: p.x * w, y: p.y * h }));
+  let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const midX = ((pts[i].x + pts[i + 1].x) / 2).toFixed(1);
+    const midY = ((pts[i].y + pts[i + 1].y) / 2).toFixed(1);
+    d += ` Q ${pts[i].x.toFixed(1)} ${pts[i].y.toFixed(1)}, ${midX} ${midY}`;
+  }
+  const last = pts[pts.length - 1];
+  d += ` L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
+  return d;
+}
+
+const PEN_MODE_ACCENTS = {
+  read: {
+    jewel: '#38bdf8',
+    glow: 'rgba(56, 189, 248, 0.55)',
+    tip: '#e0f2fe',
+  },
+  mark: {
+    jewel: '#f59e0b',
+    glow: 'rgba(245, 158, 11, 0.65)',
+    tip: '#fef08a',
+  },
+  circle: {
+    jewel: '#f43f5e',
+    glow: 'rgba(244, 63, 94, 0.65)',
+    tip: '#fecdd3',
+  },
+} as const;
+
+function FolioPenCursor({
+  active,
+  mode = 'read',
+}: {
+  active: boolean;
+  mode?: 'read' | 'mark' | 'circle';
+}) {
+  const cursorRef = useRef<HTMLDivElement | null>(null);
+  const rigRef = useRef<HTMLDivElement | null>(null);
+  const shadowRef = useRef<HTMLDivElement | null>(null);
+  const uid = useId().replace(/:/g, '');
+
+  const motionRef = useRef({
+    visible: false,
+    x: -200,
+    y: -200,
+    targetAngle: -4,
+    angle: -4,
+    pressed: false,
+    pressAnim: 0,
+    lastX: -200,
+  });
+
+  useEffect(() => {
+    if (!active) {
+      motionRef.current.visible = false;
+      if (cursorRef.current) cursorRef.current.style.opacity = '0';
+      return;
+    }
+
+    const syncVisibility = (target: EventTarget | null, pointerType?: string) => {
+      if (pointerType && pointerType !== 'mouse') {
+        motionRef.current.visible = false;
+        return;
+      }
+      const el = target instanceof Element ? target : null;
+      const onSurface = Boolean(el?.closest('.folio-pen-surface'));
+      const onControl = Boolean(el?.closest('button, a, input, textarea, [data-pen-ignore]'));
+      motionRef.current.visible = onSurface && !onControl;
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      const m = motionRef.current;
+      if (e.pointerType !== 'mouse') {
+        m.visible = false;
+        return;
+      }
+      const dx = m.lastX > -100 ? e.clientX - m.lastX : 0;
+      m.lastX = e.clientX;
+      m.x = e.clientX;
+      m.y = e.clientY;
+      m.targetAngle = Math.max(-18, Math.min(16, -4 + dx * 0.42));
+      syncVisibility(e.target, e.pointerType);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse' || e.button !== 0) return;
+      motionRef.current.pressed = true;
+      motionRef.current.x = e.clientX;
+      motionRef.current.y = e.clientY;
+      syncVisibility(e.target, e.pointerType);
+    };
+
+    const onPointerUp = () => {
+      motionRef.current.pressed = false;
+    };
+
+    const onBlur = () => {
+      motionRef.current.visible = false;
+      motionRef.current.pressed = false;
+    };
+
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
+    window.addEventListener('pointerdown', onPointerDown, { passive: true });
+    window.addEventListener('pointerup', onPointerUp, { passive: true });
+    window.addEventListener('pointercancel', onPointerUp, { passive: true });
+    window.addEventListener('blur', onBlur);
+
+    let rafId = 0;
+    const tick = () => {
+      const m = motionRef.current;
+      m.targetAngle += (-4 - m.targetAngle) * 0.14;
+      m.angle += (m.targetAngle - m.angle) * 0.28;
+      const targetPress = m.pressed ? 1 : 0;
+      m.pressAnim += (targetPress - m.pressAnim) * 0.34;
+
+      const cursorEl = cursorRef.current;
+      const rigEl = rigRef.current;
+      const shadowEl = shadowRef.current;
+
+      if (cursorEl) {
+        cursorEl.style.opacity = m.visible ? '1' : '0';
+        if (m.visible) {
+          cursorEl.style.transform = `translate3d(${m.x.toFixed(1)}px, ${m.y.toFixed(1)}px, 0)`;
+        }
+      }
+      if (rigEl && m.visible) {
+        const dipY = m.pressAnim * 1.6;
+        const scale = 1 - m.pressAnim * 0.055;
+        rigEl.style.transform = `translate3d(0, ${dipY.toFixed(2)}px, 0) rotate(${m.angle.toFixed(
+          2
+        )}deg) scale(${scale.toFixed(3)})`;
+      }
+      if (shadowEl && m.visible) {
+        shadowEl.style.opacity = (0.28 + m.pressAnim * 0.36).toFixed(2);
+        const sx = 4 - m.pressAnim * 2.4;
+        const sy = 3 - m.pressAnim * 1.4;
+        const sc = 1 - m.pressAnim * 0.24;
+        shadowEl.style.transform = `translate3d(${sx.toFixed(1)}px, ${sy.toFixed(
+          1
+        )}px, 0) scale(${sc.toFixed(2)})`;
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+    rafId = window.requestAnimationFrame(tick);
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [active]);
+
+  if (!active || typeof document === 'undefined') return null;
+  const accent = PEN_MODE_ACCENTS[mode];
+
+  return createPortal(
+    <div ref={cursorRef} className="folio-pen-cursor" aria-hidden="true">
+      <div ref={shadowRef} className="folio-pen-shadow" />
+      <div ref={rigRef} className="folio-pen-rig">
+        <svg
+          width="46"
+          height="46"
+          viewBox="0 0 46 46"
+          fill="none"
+          className="-ml-[2px] -mt-[2px] drop-shadow-[0_6px_10px_rgba(0,0,0,0.34)]"
+        >
+          <defs>
+            <linearGradient id={`nib-${uid}`} x1="2" y1="2" x2="18" y2="18" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#fff4cf" />
+              <stop offset="45%" stopColor="#eab95e" />
+              <stop offset="100%" stopColor="#9c6c1e" />
+            </linearGradient>
+            <linearGradient id={`barrel-${uid}`} x1="16" y1="16" x2="43" y2="43" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#1e3440" />
+              <stop offset="52%" stopColor="#0e1a22" />
+              <stop offset="100%" stopColor="#070e13" />
+            </linearGradient>
+            <linearGradient id={`collar-${uid}`} x1="13" y1="18" x2="19" y2="12" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#b07c26" />
+              <stop offset="50%" stopColor="#fae09e" />
+              <stop offset="100%" stopColor="#9b691d" />
+            </linearGradient>
+          </defs>
+          <circle cx="2.5" cy="2.5" r="2.2" fill={accent.glow} />
+          <path
+            d="M 2 2 L 15.8 8.2 L 17.6 13.6 L 13.6 17.6 L 8.2 15.8 Z"
+            fill={`url(#nib-${uid})`}
+            stroke="#734d11"
+            strokeWidth="0.7"
+            strokeLinejoin="round"
+          />
+          <path d="M 2.3 2.3 L 10.6 10.6" stroke="#2c1d06" strokeWidth="0.9" strokeLinecap="round" />
+          <circle cx="10.9" cy="10.9" r="1.85" fill={accent.jewel} stroke="#231704" strokeWidth="0.5" />
+          <circle cx="2.3" cy="2.3" r="0.9" fill={accent.tip} />
+          <path
+            d="M 13.3 17.8 L 17.8 13.3 L 20.5 16 L 16 20.5 Z"
+            fill={`url(#collar-${uid})`}
+            stroke="#734d11"
+            strokeWidth="0.6"
+          />
+          <path
+            d="M 16.2 20.3 L 20.3 16.2 L 42.2 35.6 C 43.8 37.2, 43.8 39.8, 41.8 41.8 C 39.8 43.8, 37.2 43.8, 35.6 42.2 Z"
+            fill={`url(#barrel-${uid})`}
+            stroke="rgba(243, 198, 119, 0.36)"
+            strokeWidth="0.75"
+          />
+          <path
+            d="M 19.8 18.6 L 38.6 35.8"
+            stroke="rgba(255, 255, 255, 0.24)"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+          />
+          <circle cx="39.5" cy="39.5" r="2.1" fill={`url(#collar-${uid})`} opacity="0.9" />
+        </svg>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+const PAGE_ANNOTATIONS_PREFIX = 'folio-page-annotations-v1:';
+
+function loadBookAnnotations(bookId: string): PageAnnotation[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(`${PAGE_ANNOTATIONS_PREFIX}${bookId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (item): item is PageAnnotation =>
+          item &&
+          typeof item.id === 'string' &&
+          typeof item.pageNum === 'number' &&
+          (item.type === 'mark' || item.type === 'circle') &&
+          typeof item.rx === 'number' &&
+          typeof item.ry === 'number'
+      )
+      .map((item) => ({
+        ...item,
+        points: Array.isArray(item.points)
+          ? item.points.filter(
+              (pt): pt is PageAnnotationPoint =>
+                Boolean(pt) && typeof pt.x === 'number' && typeof pt.y === 'number'
+            )
+          : undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function saveBookAnnotations(bookId: string, annotations: PageAnnotation[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      `${PAGE_ANNOTATIONS_PREFIX}${bookId}`,
+      JSON.stringify(annotations)
+    );
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function PageAnnotationsLayer({
+  annotations,
+  onRemove,
+  interactive = true,
+  freshIds,
+  draftStroke = null,
+}: {
+  annotations: PageAnnotation[];
+  onRemove?: (id: string) => void;
+  interactive?: boolean;
+  freshIds?: Set<string>;
+  draftStroke?: { type: 'mark' | 'circle'; points: PageAnnotationPoint[] } | null;
+}) {
+  const freehandAnnotations = annotations.filter((item) => item.points && item.points.length >= 2);
+  const stampAnnotations = annotations.filter((item) => !item.points || item.points.length < 2);
+  const hasFreehandOrDraft = freehandAnnotations.length > 0 || Boolean(draftStroke && draftStroke.points.length >= 2);
+
+  if (annotations.length === 0 && !hasFreehandOrDraft) return null;
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
+      {hasFreehandOrDraft ? (
+        <svg
+          viewBox="0 0 770 1000"
+          preserveAspectRatio="none"
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          aria-hidden={!interactive}
+        >
+          {freehandAnnotations.map((ann) => {
+            const pathD = pointsToSmoothSvgPath(ann.points!);
+            const isFresh = Boolean(freshIds?.has(ann.id));
+            if (ann.type === 'mark') {
+              return (
+                <g
+                  key={ann.id}
+                  pointerEvents={interactive ? 'stroke' : 'none'}
+                  className={interactive ? 'cursor-pointer' : undefined}
+                  onPointerDown={interactive ? (e) => e.stopPropagation() : undefined}
+                  onPointerUp={interactive ? (e) => e.stopPropagation() : undefined}
+                  onDoubleClick={interactive ? (e) => e.stopPropagation() : undefined}
+                  onClick={
+                    interactive
+                      ? (e) => {
+                          e.stopPropagation();
+                          onRemove?.(ann.id);
+                        }
+                      : undefined
+                  }
+                >
+                  <title>Pen highlight — click to remove</title>
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke="transparent"
+                    strokeWidth="44"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d={pathD}
+                    pathLength={100}
+                    fill="none"
+                    stroke="rgba(250, 204, 21, 0.44)"
+                    strokeWidth="32"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={isFresh ? 'folio-mark-fresh' : undefined}
+                  />
+                  <path
+                    d={pathD}
+                    pathLength={100}
+                    fill="none"
+                    stroke="rgba(245, 158, 11, 0.28)"
+                    strokeWidth="12"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={isFresh ? 'folio-mark-fresh' : undefined}
+                  />
+                </g>
+              );
+            }
+            return (
+              <g
+                key={ann.id}
+                pointerEvents={interactive ? 'stroke' : 'none'}
+                className={interactive ? 'cursor-pointer' : undefined}
+                onPointerDown={interactive ? (e) => e.stopPropagation() : undefined}
+                onPointerUp={interactive ? (e) => e.stopPropagation() : undefined}
+                onDoubleClick={interactive ? (e) => e.stopPropagation() : undefined}
+                onClick={
+                  interactive
+                    ? (e) => {
+                        e.stopPropagation();
+                        onRemove?.(ann.id);
+                      }
+                    : undefined
+                }
+              >
+                <title>Pen ink circle — click to remove</title>
+                <path
+                  d={pathD}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth="30"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d={pathD}
+                  pathLength={100}
+                  fill="rgba(225, 29, 72, 0.05)"
+                  stroke="#e11d48"
+                  strokeWidth="8.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={isFresh ? 'folio-draw-fresh' : undefined}
+                />
+                <path
+                  d={pathD}
+                  pathLength={100}
+                  fill="none"
+                  stroke="#9f1239"
+                  strokeWidth="3.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity="0.65"
+                  className={isFresh ? 'folio-draw-fresh' : undefined}
+                />
+              </g>
+            );
+          })}
+
+          {draftStroke && draftStroke.points.length >= 2 ? (
+            <path
+              d={pointsToSmoothSvgPath(draftStroke.points)}
+              fill={draftStroke.type === 'circle' ? 'rgba(225, 29, 72, 0.05)' : 'none'}
+              stroke={
+                draftStroke.type === 'mark' ? 'rgba(250, 204, 21, 0.56)' : '#e11d48'
+              }
+              strokeWidth={draftStroke.type === 'mark' ? 32 : 8.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ) : null}
+        </svg>
+      ) : null}
+
+      {stampAnnotations.map((ann) => {
+        const isFresh = Boolean(freshIds?.has(ann.id));
+        const style: React.CSSProperties = {
+          left: `${(ann.rx * 100).toFixed(2)}%`,
+          top: `${(ann.ry * 100).toFixed(2)}%`,
+        };
+        if (ann.type === 'mark') {
+          return (
+            <button
+              key={ann.id}
+              type="button"
+              style={style}
+              title="Highlighted mark — click to remove"
+              aria-label="Remove page mark"
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove?.(ann.id);
+              }}
+              className={`folio-page-mark ${interactive ? 'pointer-events-auto' : 'pointer-events-none'}`}
+            >
+              <svg viewBox="0 0 180 28" preserveAspectRatio="none" className="w-full h-full overflow-visible" aria-hidden="true">
+                <path
+                  d="M 6 15 Q 52 10, 96 14 T 174 13"
+                  pathLength={100}
+                  fill="none"
+                  stroke="rgba(250, 204, 21, 0.54)"
+                  strokeWidth="17"
+                  strokeLinecap="round"
+                  className={isFresh ? 'folio-mark-fresh' : undefined}
+                />
+                <path
+                  d="M 10 17 Q 76 13, 168 15"
+                  pathLength={100}
+                  fill="none"
+                  stroke="rgba(245, 158, 11, 0.34)"
+                  strokeWidth="6"
+                  strokeLinecap="round"
+                  className={isFresh ? 'folio-mark-fresh' : undefined}
+                />
+              </svg>
+              {isFresh ? (
+                <span
+                  aria-hidden="true"
+                  className="folio-nib-mark-tracer pointer-events-none absolute left-0 top-1/2 -mt-3 text-amber-600 drop-shadow"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M2 2L14 7L17 12L12 17L7 14Z" fill="#eab308" stroke="#78350f" strokeWidth="1.2" />
+                    <circle cx="9.5" cy="9.5" r="1.6" fill="#fef08a" />
+                  </svg>
+                </span>
+              ) : null}
+            </button>
+          );
+        }
+        return (
+          <button
+            key={ann.id}
+            type="button"
+            style={style}
+            title="Ink circle — click to remove"
+            aria-label="Remove ink circle"
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove?.(ann.id);
+            }}
+            className={`folio-page-circle ${interactive ? 'pointer-events-auto' : 'pointer-events-none'}`}
+          >
+            <svg viewBox="0 0 100 100" className="w-full h-full overflow-visible" aria-hidden="true">
+              <ellipse
+                cx="50"
+                cy="50"
+                rx="40"
+                ry="34"
+                pathLength={100}
+                fill="rgba(225, 29, 72, 0.08)"
+                stroke="#e11d48"
+                strokeWidth="4.2"
+                strokeLinecap="round"
+                transform="rotate(-7 50 50)"
+                className={isFresh ? 'folio-draw-fresh' : undefined}
+              />
+              <path
+                d="M 19 36 C 34 14, 77 14, 88 41 C 94 64, 71 86, 44 84 C 19 82, 11 58, 22 33"
+                pathLength={100}
+                fill="none"
+                stroke="#be123c"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                opacity="0.72"
+                className={isFresh ? 'folio-draw-fresh' : undefined}
+              />
+            </svg>
+            {isFresh ? (
+              <span
+                aria-hidden="true"
+                className="folio-nib-circle-tracer pointer-events-none absolute inset-0"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24">
+                  <path d="M2 2L14 7L17 12L12 17L7 14Z" fill="#f43f5e" stroke="#881337" strokeWidth="1.2" />
+                  <circle cx="9.5" cy="9.5" r="1.6" fill="#ffe4e6" />
+                </svg>
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SpreadPageSurface({
+  src,
+  alt,
+  annotations,
+  freshIds,
+  interactiveAnnotations = true,
+  draftStroke = null,
+  onRemoveAnnotation,
+}: {
+  src: string;
+  alt: string;
+  annotations: PageAnnotation[];
+  freshIds?: Set<string>;
+  interactiveAnnotations?: boolean;
+  draftStroke?: { type: 'mark' | 'circle'; points: PageAnnotationPoint[] } | null;
+  onRemoveAnnotation: (id: string) => void;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [boxSize, setBoxSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const [aspect, setAspect] = useState(0.77);
+
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+    const measure = () => {
+      const style = window.getComputedStyle(el);
+      const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+      const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+      setBoxSize({
+        w: Math.max(0, el.clientWidth - padX),
+        h: Math.max(0, el.clientHeight - padY),
+      });
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const fitStyle = useMemo<React.CSSProperties | undefined>(() => {
+    if (boxSize.w <= 0 || boxSize.h <= 0 || aspect <= 0) return undefined;
+    let w = boxSize.w;
+    let h = w / aspect;
+    if (h > boxSize.h) {
+      h = boxSize.h;
+      w = h * aspect;
+    }
+    return { width: `${Math.round(w)}px`, height: `${Math.round(h)}px` };
+  }, [boxSize.w, boxSize.h, aspect]);
+
+  return (
+    <div ref={hostRef} className="w-full h-full p-2 sm:p-3 flex items-center justify-center">
+      <div style={fitStyle} className="relative shrink-0">
+        <img
+          src={src}
+          alt={alt}
+          draggable={false}
+          onLoad={(e) => {
+            const { naturalWidth, naturalHeight } = e.currentTarget;
+            if (naturalWidth > 0 && naturalHeight > 0) {
+              setAspect(naturalWidth / naturalHeight);
+            }
+          }}
+          className="w-full h-full object-contain block select-none"
+        />
+        <PageAnnotationsLayer
+          annotations={annotations}
+          freshIds={freshIds}
+          interactive={interactiveAnnotations}
+          draftStroke={draftStroke}
+          onRemove={onRemoveAnnotation}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface TapMenuAnchor {
+  pageNum: number;
+  rx: number;
+  ry: number;
+  screenX: number;
+  screenY: number;
+}
+
+function DoubleTapFabMenu({
+  anchor,
+  onZoom,
+  onMark,
+  onCircle,
+  onClose,
+}: {
+  anchor: TapMenuAnchor;
+  onZoom: () => void;
+  onMark: () => void;
+  onCircle: () => void;
+  onClose: () => void;
+}) {
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    let raf2 = 0;
+    const raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        setActive(true);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+    };
+  }, [anchor]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [onClose]);
+
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const clampedX = Math.max(92, Math.min(vw - 92, anchor.screenX));
+  const clampedY = Math.max(115, Math.min(vh - 46, anchor.screenY));
+
+  const menuContent = (
+    <div
+      className="fixed inset-0 z-[95]"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        style={{
+          position: 'fixed',
+          left: `${Math.round(clampedX)}px`,
+          top: `${Math.round(clampedY)}px`,
+          transform: 'translate(-50%, -50%)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className={`folio-fab-container ${active ? 'active' : ''}`}
+          role="menu"
+          aria-label={`Page ${anchor.pageNum} quick options`}
+        >
+          <span className="folio-fab-ripple" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            aria-label="Close page options"
+            title="Close options"
+            className="folio-fab-button"
+          >
+            <span className="folio-fab-pen" aria-hidden="true">
+              <PenTool className="w-[22px] h-[22px]" strokeWidth={2.1} />
+            </span>
+          </button>
+
+          <div className="folio-fab-options">
+            <button
+              type="button"
+              role="menuitem"
+              title="Zoom"
+              aria-label="Zoom page"
+              onClick={(e) => {
+                e.stopPropagation();
+                onZoom();
+              }}
+              className="folio-fab-option folio-fab-opt-zoom"
+            >
+              <ZoomIn className="w-[18px] h-[18px]" strokeWidth={2.2} />
+              <span className="text-[9px] font-semibold leading-none tracking-tight">Zoom</span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              title="Mark"
+              aria-label="Mark highlight on page"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMark();
+              }}
+              className="folio-fab-option folio-fab-opt-mark"
+            >
+              <Highlighter className="w-[18px] h-[18px]" strokeWidth={2.2} />
+              <span className="text-[9px] font-semibold leading-none tracking-tight">Mark</span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              title="Circle"
+              aria-label="Circle on page"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCircle();
+              }}
+              className="folio-fab-option folio-fab-opt-circle"
+            >
+              <Circle className="w-[18px] h-[18px]" strokeWidth={2.3} />
+              <span className="text-[9px] font-semibold leading-none tracking-tight">Circle</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(menuContent, document.body);
+}
+
 export interface FocusAnchor {
   pageNum: number;
   rx: number;
@@ -3422,6 +4667,13 @@ interface FocusedPageOverlayProps {
   pageErrors: Record<number, string>;
   keptPage?: number | null;
   keeperColor?: BookKeeperColor;
+  annotations?: PageAnnotation[];
+  freshIds?: Set<string>;
+  activePenTool?: PenToolMode;
+  onChangePenTool?: (tool: PenToolMode) => void;
+  onAddStamp?: (type: 'mark' | 'circle', pageNum: number, rx: number, ry: number) => void;
+  onAddStroke?: (type: 'mark' | 'circle', pageNum: number, points: PageAnnotationPoint[]) => void;
+  onRemoveAnnotation?: (id: string) => void;
   onToggleBookmark?: (pageNum: number) => void;
   onSelectKeeperColor?: (color: BookKeeperColor, pageNum: number) => void;
   onRequestHiRes: (pageNum: number) => void;
@@ -3441,6 +4693,13 @@ function FocusedPageOverlay({
   pageErrors,
   keptPage = null,
   keeperColor = 'crimson',
+  annotations = [],
+  freshIds,
+  activePenTool = null,
+  onChangePenTool,
+  onAddStamp,
+  onAddStroke,
+  onRemoveAnnotation,
   onToggleBookmark,
   onSelectKeeperColor,
   onRequestHiRes,
@@ -3448,6 +4707,7 @@ function FocusedPageOverlay({
   onClose,
 }: FocusedPageOverlayProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const pageSheetRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const dragRef = useRef<{
     pointerId: number;
@@ -3456,6 +4716,12 @@ function FocusedPageOverlay({
     startPanX: number;
     startPanY: number;
     moved: boolean;
+  } | null>(null);
+  const penDrawRef = useRef<{
+    pointerId: number;
+    type: 'mark' | 'circle';
+    points: PageAnnotationPoint[];
+    totalDist: number;
   } | null>(null);
   const lastTouchTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
@@ -3474,6 +4740,7 @@ function FocusedPageOverlay({
   const [zoom, setZoom] = useState(DEFAULT_FOCUS_ZOOM);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [draftStroke, setDraftStroke] = useState<DraftPageStroke | null>(null);
   const [tone, setTone] = useState<PaperTone>('crisp');
   const [entered, setEntered] = useState(false);
   const [ribbonRevealed, setRibbonRevealed] = useState(false);
@@ -3602,7 +4869,11 @@ function FocusedPageOverlay({
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopImmediatePropagation();
-        onClose();
+        if (activePenTool) {
+          onChangePenTool?.(null);
+        } else {
+          onClose();
+        }
       } else if (e.key === 'ArrowLeft') {
         if (anchor.pageNum > 1) {
           e.preventDefault();
@@ -3631,7 +4902,18 @@ function FocusedPageOverlay({
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [anchor.pageNum, numPages, onChangePage, onClose, zoom, zoomAtPoint]);
+  }, [activePenTool, anchor.pageNum, numPages, onChangePage, onChangePenTool, onClose, zoom, zoomAtPoint]);
+
+  const toNormalizedSheetPoint = useCallback((clientX: number, clientY: number): PageAnnotationPoint | null => {
+    const el = pageSheetRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      x: clampVal((clientX - rect.left) / rect.width, 0.03, 0.97),
+      y: clampVal((clientY - rect.top) / rect.height, 0.03, 0.97),
+    };
+  }, []);
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
@@ -3643,6 +4925,8 @@ function FocusedPageOverlay({
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     if (activePointersRef.current.size === 2) {
+      penDrawRef.current = null;
+      setDraftStroke(null);
       const pts = Array.from(activePointersRef.current.values());
       const dist = Math.max(12, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y));
       const midX = (pts[0].x + pts[1].x) / 2;
@@ -3663,6 +4947,19 @@ function FocusedPageOverlay({
 
     if (activePointersRef.current.size === 1) {
       pinchRef.current = null;
+      if (activePenTool) {
+        const pt = toNormalizedSheetPoint(e.clientX, e.clientY);
+        if (pt) {
+          penDrawRef.current = {
+            pointerId: e.pointerId,
+            type: activePenTool,
+            points: [pt],
+            totalDist: 0,
+          };
+          setDraftStroke({ pageNum: anchor.pageNum, type: activePenTool, points: [pt] });
+          return;
+        }
+      }
       dragRef.current = {
         pointerId: e.pointerId,
         startX: e.clientX,
@@ -3708,6 +5005,25 @@ function FocusedPageOverlay({
       return;
     }
 
+    const stroke = penDrawRef.current;
+    if (stroke && stroke.pointerId === e.pointerId) {
+      const pt = toNormalizedSheetPoint(e.clientX, e.clientY);
+      if (pt) {
+        const prev = stroke.points[stroke.points.length - 1];
+        const seg = Math.hypot(pt.x - prev.x, pt.y - prev.y);
+        if (seg >= 0.004) {
+          stroke.points.push(pt);
+          stroke.totalDist += seg;
+          setDraftStroke({
+            pageNum: anchor.pageNum,
+            type: stroke.type,
+            points: [...stroke.points],
+          });
+        }
+      }
+      return;
+    }
+
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
     const dx = e.clientX - drag.startX;
@@ -3732,6 +5048,21 @@ function FocusedPageOverlay({
         pinchRef.current = null;
         dragRef.current = null;
         setIsDragging(false);
+      }
+      return;
+    }
+
+    const stroke = penDrawRef.current;
+    if (stroke && stroke.pointerId === e.pointerId) {
+      penDrawRef.current = null;
+      setDraftStroke(null);
+      if (stroke.totalDist < 0.022 || stroke.points.length < 2) {
+        const origin = stroke.points[0];
+        if (origin) {
+          onAddStamp?.(stroke.type, anchor.pageNum, origin.x, origin.y);
+        }
+      } else {
+        onAddStroke?.(stroke.type, anchor.pageNum, stroke.points);
       }
       return;
     }
@@ -3830,11 +5161,13 @@ function FocusedPageOverlay({
           </div>
         ) : activeSrc ? (
           <div
+            ref={pageSheetRef}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
             onDoubleClick={(e) => {
+              if (activePenTool) return;
               e.stopPropagation();
               togglePointZoom(e.clientX, e.clientY);
             }}
@@ -3845,7 +5178,7 @@ function FocusedPageOverlay({
               transition: isDragging ? 'none' : 'transform 260ms cubic-bezier(0.22, 1, 0.36, 1)',
               willChange: 'transform',
             }}
-            className={`relative rounded-[4px] bg-white shadow-[0_28px_80px_rgba(0,0,0,0.82)] ring-1 ring-white/20 overflow-hidden ${
+            className={`folio-pen-surface relative rounded-[4px] bg-white shadow-[0_28px_80px_rgba(0,0,0,0.82)] ring-1 ring-white/20 overflow-hidden ${
               isDragging ? 'cursor-grabbing' : zoom > 1.05 ? 'cursor-grab' : 'cursor-zoom-in'
             }`}
           >
@@ -3897,6 +5230,17 @@ function FocusedPageOverlay({
               }}
               style={{ filter: TONE_FILTERS[tone] }}
               className="w-full h-full object-contain block select-none pointer-events-none"
+            />
+            <PageAnnotationsLayer
+              annotations={annotations}
+              freshIds={freshIds}
+              interactive={activePenTool === null}
+              draftStroke={
+                draftStroke && draftStroke.pageNum === anchor.pageNum
+                  ? { type: draftStroke.type, points: draftStroke.points }
+                  : null
+              }
+              onRemove={onRemoveAnnotation}
             />
           </div>
         ) : (
@@ -3986,6 +5330,42 @@ function FocusedPageOverlay({
             <Contrast className="w-3.5 h-3.5 text-[#7fd4cb]" />
             <span>{TONE_LABELS[tone]}</span>
           </button>
+
+          {onChangePenTool ? (
+            <>
+              <span className="hidden sm:inline-block w-px h-4 bg-white/15" aria-hidden="true" />
+              <div role="group" aria-label="Fountain pen tools" className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  aria-pressed={activePenTool === 'mark'}
+                  onClick={() => onChangePenTool(activePenTool === 'mark' ? null : 'mark')}
+                  title={activePenTool === 'mark' ? 'Exit Mark pen' : 'Arm Mark highlighter pen'}
+                  className={`inline-flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg border whitespace-nowrap transition-colors cursor-pointer ${
+                    activePenTool === 'mark'
+                      ? 'bg-amber-400/20 border-amber-300/60 text-amber-200'
+                      : 'bg-white/8 hover:bg-white/15 border-transparent text-[#d4ebea]'
+                  }`}
+                >
+                  <Highlighter className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Mark</span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={activePenTool === 'circle'}
+                  onClick={() => onChangePenTool(activePenTool === 'circle' ? null : 'circle')}
+                  title={activePenTool === 'circle' ? 'Exit Circle pen' : 'Arm Circle ink pen'}
+                  className={`inline-flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg border whitespace-nowrap transition-colors cursor-pointer ${
+                    activePenTool === 'circle'
+                      ? 'bg-rose-500/25 border-rose-300/60 text-rose-200'
+                      : 'bg-white/8 hover:bg-white/15 border-transparent text-[#d4ebea]'
+                  }`}
+                >
+                  <Circle className="w-3.5 h-3.5 text-rose-300" />
+                  <span>Circle</span>
+                </button>
+              </div>
+            </>
+          ) : null}
 
           {onToggleBookmark ? (
             <>
@@ -4119,6 +5499,7 @@ interface FlipBookReaderProps {
   originRect?: PocketOriginRect | null;
   closing?: boolean;
   apiBaseUrl?: string;
+  pdfAssetsBaseUrl?: string;
   hasBackend?: boolean;
   onBookUpdate?: (updated: VaultBook) => void;
 }
@@ -4128,6 +5509,7 @@ export function FlipBookReader({
   originRect,
   closing = false,
   apiBaseUrl,
+  pdfAssetsBaseUrl,
   hasBackend = true,
   onBookUpdate,
 }: FlipBookReaderProps) {
@@ -4141,6 +5523,13 @@ export function FlipBookReader({
   const [jumpValue, setJumpValue] = useState('1');
   const [singleZoom, setSingleZoom] = useState(false);
   const [focusAnchor, setFocusAnchor] = useState<FocusAnchor | null>(null);
+  const [tapMenu, setTapMenu] = useState<TapMenuAnchor | null>(null);
+  const [activePenTool, setActivePenTool] = useState<PenToolMode>(null);
+  const [draftStroke, setDraftStroke] = useState<DraftPageStroke | null>(null);
+  const [freshAnnotationIds, setFreshAnnotationIds] = useState<Set<string>>(() => new Set());
+  const [annotations, setAnnotations] = useState<PageAnnotation[]>(() =>
+    loadBookAnnotations(book.id)
+  );
   const [hiResImages, setHiResImages] = useState<Record<number, string>>({});
   const [progress, setProgress] = useState<BookProgressState>(() => resolveBookProgress(book));
 
@@ -4151,6 +5540,9 @@ export function FlipBookReader({
   const [keeperRevealed, setKeeperRevealed] = useState(false);
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(() =>
     getCachedPdfCoverSync(book.id, book.sizeBytes)
+  );
+  const [bindingTheme, setBindingTheme] = useState<BookBindingTheme | null>(() =>
+    getCachedBookBindingTheme(book.id, book.sizeBytes)
   );
 
   const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
@@ -4171,8 +5563,17 @@ export function FlipBookReader({
   const bookRef = useRef(book);
   const onBookUpdateRef = useRef(onBookUpdate);
   const lastPageTapRef = useRef<{ time: number; x: number; y: number; pageNum: number } | null>(null);
+  const lastTapMenuOpenedAtRef = useRef(0);
   const suppressClickUntilRef = useRef(0);
   const spreadSwipeRef = useRef<{ x: number; y: number } | null>(null);
+  const strokeDraftRef = useRef<{
+    pointerId: number;
+    pageNum: number;
+    type: 'mark' | 'circle';
+    points: PageAnnotationPoint[];
+    totalDist: number;
+  } | null>(null);
+  const freshTimersRef = useRef<number[]>([]);
 
   useEffect(() => {
     bookRef.current = book;
@@ -4217,6 +5618,7 @@ export function FlipBookReader({
       getCachedPdfCoverSync(book.id, book.sizeBytes) ||
       (serverCoverUrl && !failedServerUrls.has(serverCoverUrl) ? serverCoverUrl : null);
     setCoverPreviewUrl(syncCached);
+    setBindingTheme(getCachedBookBindingTheme(book.id, book.sizeBytes));
 
     let cancelled = false;
     if (!syncCached) {
@@ -4225,7 +5627,7 @@ export function FlipBookReader({
         apiBaseUrl,
         hasBackend
       );
-      getOrRenderPdfCover(book.id, book.sizeBytes, true, { pdfUrl, apiBaseUrl, hasBackend })
+      getOrRenderPdfCover(book.id, book.sizeBytes, true, { pdfUrl, apiBaseUrl, pdfAssetsBaseUrl, hasBackend })
         .then((url) => {
           if (!cancelled) setCoverPreviewUrl(url);
         })
@@ -4267,6 +5669,10 @@ export function FlipBookReader({
   useEffect(() => {
     if (closing) {
       setFocusAnchor(null);
+      setTapMenu(null);
+      setActivePenTool(null);
+      setDraftStroke(null);
+      strokeDraftRef.current = null;
     }
   }, [closing]);
 
@@ -4335,6 +5741,7 @@ export function FlipBookReader({
     hasInteractedRef.current = false;
     pendingCommittedPageRef.current = null;
     setProgress(initialProgress);
+    setAnnotations(loadBookAnnotations(bookRef.current.id));
     setLoadingDoc(true);
     setDocError(null);
     setNumPages(0);
@@ -4343,6 +5750,10 @@ export function FlipBookReader({
     setPageImages({});
     setHiResImages({});
     setFocusAnchor(null);
+    setTapMenu(null);
+    setActivePenTool(null);
+    setDraftStroke(null);
+    strokeDraftRef.current = null;
     setPageErrors({});
     setJumpValue('1');
     renderedSetRef.current = new Set();
@@ -4353,38 +5764,44 @@ export function FlipBookReader({
     hiResOrderRef.current = [];
 
     const url = resolveBookFileUrl(book, apiBaseUrl, hasBackend);
-    const loadingTask = pdfjsLib.getDocument({
-      url,
-      wasmUrl: '/pdfjs/wasm/',
-      cMapUrl: '/pdfjs/cmaps/',
-      cMapPacked: true,
-      standardFontDataUrl: '/pdfjs/standard_fonts/',
-      iccUrl: '/pdfjs/iccs/',
-      rangeChunkSize: 65536,
-      disableAutoFetch: true,
-    });
+    let activeLoadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
 
-    loadingTask.promise
-      .then((doc) => {
-        if (cancelled) {
-          void loadingTask.destroy();
-          return;
-        }
-        pdfDocRef.current = doc;
-        setNumPages(doc.numPages);
-        const resumePage = getKeptPage(initialProgress);
-        if (resumePage) {
-          const clampedResume = Math.max(1, Math.min(doc.numPages, resumePage));
-          setCurrentSpread(Math.floor(clampedResume / 2));
-        }
-        setLoadingDoc(false);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setDocError(err instanceof Error ? err.message : 'Unable to open PDF inside reader.');
-          setLoadingDoc(false);
-        }
+    void resolvePdfAssetsBase(pdfAssetsBaseUrl).then((assetsBase) => {
+      if (cancelled) return;
+      const loadingTask = pdfjsLib.getDocument({
+        url,
+        wasmUrl: `${assetsBase}wasm/`,
+        cMapUrl: `${assetsBase}cmaps/`,
+        cMapPacked: true,
+        standardFontDataUrl: `${assetsBase}standard_fonts/`,
+        iccUrl: `${assetsBase}iccs/`,
+        rangeChunkSize: 65536,
+        disableAutoFetch: true,
       });
+      activeLoadingTask = loadingTask;
+
+      loadingTask.promise
+        .then((doc) => {
+          if (cancelled) {
+            void loadingTask.destroy();
+            return;
+          }
+          pdfDocRef.current = doc;
+          setNumPages(doc.numPages);
+          const resumePage = getKeptPage(initialProgress);
+          if (resumePage) {
+            const clampedResume = Math.max(1, Math.min(doc.numPages, resumePage));
+            setCurrentSpread(Math.floor(clampedResume / 2));
+          }
+          setLoadingDoc(false);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setDocError(err instanceof Error ? err.message : 'Unable to open PDF inside reader.');
+            setLoadingDoc(false);
+          }
+        });
+    });
 
     return () => {
       cancelled = true;
@@ -4399,9 +5816,11 @@ export function FlipBookReader({
         saveTimerRef.current = null;
       }
       pdfDocRef.current = null;
-      void loadingTask.destroy();
+      if (activeLoadingTask) {
+        void activeLoadingTask.destroy();
+      }
     };
-  }, [book.id, book.sourceUrl, apiBaseUrl, hasBackend]);
+  }, [book.id, book.sourceUrl, apiBaseUrl, pdfAssetsBaseUrl, hasBackend]);
 
   const renderPdfPage = useCallback(async (pageNum: number) => {
     const doc = pdfDocRef.current;
@@ -4591,14 +6010,13 @@ export function FlipBookReader({
     [book.id, numPages, persistProgressToServer]
   );
 
-  const openPageFocus = useCallback(
-    (pageNum: number, clientX: number, clientY: number, containerEl: HTMLElement) => {
+  const openPageFocusAtNormalized = useCallback(
+    (pageNum: number, rx: number, ry: number) => {
       if (pageNum < 1 || pageNum > numPages) return;
       if (clickTimerRef.current !== null) {
         window.clearTimeout(clickTimerRef.current);
         clickTimerRef.current = null;
       }
-      const { rx, ry } = computeImageNormalizedPoint(containerEl, clientX, clientY);
       void renderPdfPage(pageNum);
       void renderHiResPage(pageNum);
       hasInteractedRef.current = true;
@@ -4608,9 +6026,131 @@ export function FlipBookReader({
     [commitPageProgress, numPages, renderHiResPage, renderPdfPage]
   );
 
+  const openTapOptionsMenu = useCallback(
+    (pageNum: number, clientX: number, clientY: number, containerEl: HTMLElement) => {
+      if (pageNum < 1 || pageNum > numPages) return;
+      if (clickTimerRef.current !== null) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      const now = performance.now();
+      if (now - lastTapMenuOpenedAtRef.current < 220) {
+        return;
+      }
+      lastTapMenuOpenedAtRef.current = now;
+      const { rx, ry } = computeImageNormalizedPoint(containerEl, clientX, clientY);
+      setTapMenu({
+        pageNum,
+        rx,
+        ry,
+        screenX: clientX,
+        screenY: clientY,
+      });
+    },
+    [numPages]
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const timer of freshTimersRef.current) {
+        window.clearTimeout(timer);
+      }
+      freshTimersRef.current = [];
+    };
+  }, []);
+
+  const markFreshAnnotation = useCallback((id: string) => {
+    setFreshAnnotationIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    const timer = window.setTimeout(() => {
+      setFreshAnnotationIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }, 820);
+    freshTimersRef.current.push(timer);
+  }, []);
+
+  const toggleAnnotationAtPoint = useCallback(
+    (type: 'mark' | 'circle', pageNum: number, rx: number, ry: number) => {
+      let addedId: string | null = null;
+      setAnnotations((prev) => {
+        const existingIndex = prev.findIndex(
+          (item) =>
+            !item.points &&
+            item.pageNum === pageNum &&
+            item.type === type &&
+            Math.hypot(item.rx - rx, item.ry - ry) < 0.055
+        );
+        if (existingIndex >= 0) {
+          const next = prev.filter((_, idx) => idx !== existingIndex);
+          saveBookAnnotations(book.id, next);
+          return next;
+        }
+        addedId = `${type}-${pageNum}-${Date.now().toString(36)}-${Math.random()
+          .toString(36)
+          .slice(2, 6)}`;
+        const next = [
+          ...prev,
+          {
+            id: addedId,
+            pageNum,
+            type,
+            rx,
+            ry,
+          },
+        ];
+        saveBookAnnotations(book.id, next);
+        return next;
+      });
+      if (addedId) {
+        markFreshAnnotation(addedId);
+      }
+    },
+    [book.id, markFreshAnnotation]
+  );
+
+  const addFreehandAnnotation = useCallback(
+    (type: 'mark' | 'circle', pageNum: number, points: PageAnnotationPoint[]) => {
+      if (points.length < 2) return;
+      const sum = points.reduce(
+        (acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }),
+        { x: 0, y: 0 }
+      );
+      const rx = sum.x / points.length;
+      const ry = sum.y / points.length;
+      const id = `${type}-stroke-${pageNum}-${Date.now().toString(36)}-${Math.random()
+        .toString(36)
+        .slice(2, 6)}`;
+      setAnnotations((prev) => {
+        const next = [...prev, { id, pageNum, type, rx, ry, points }];
+        saveBookAnnotations(book.id, next);
+        return next;
+      });
+      markFreshAnnotation(id);
+    },
+    [book.id, markFreshAnnotation]
+  );
+
+  const removeAnnotationById = useCallback(
+    (id: string) => {
+      setAnnotations((prev) => {
+        const next = prev.filter((item) => item.id !== id);
+        saveBookAnnotations(book.id, next);
+        return next;
+      });
+    },
+    [book.id]
+  );
+
   const handlePageTapPointerUp = useCallback(
     (pageNum: number, e: React.PointerEvent<HTMLElement>) => {
-      if (e.pointerType !== 'touch' || pageNum < 1 || pageNum > numPages) return;
+      if (activePenTool !== null || e.pointerType !== 'touch' || pageNum < 1 || pageNum > numPages) return;
       const now = performance.now();
       const prev = lastPageTapRef.current;
       if (
@@ -4621,12 +6161,77 @@ export function FlipBookReader({
       ) {
         lastPageTapRef.current = null;
         suppressClickUntilRef.current = now + 420;
-        openPageFocus(pageNum, e.clientX, e.clientY, e.currentTarget);
+        openTapOptionsMenu(pageNum, e.clientX, e.clientY, e.currentTarget);
       } else {
         lastPageTapRef.current = { time: now, x: e.clientX, y: e.clientY, pageNum };
       }
     },
-    [numPages, openPageFocus]
+    [activePenTool, numPages, openTapOptionsMenu]
+  );
+
+  const handlePageSurfacePointerDown = useCallback(
+    (pageNum: number, e: React.PointerEvent<HTMLElement>) => {
+      if (!activePenTool || pageNum < 1 || pageNum > numPages) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.stopPropagation();
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore capture failure
+      }
+      const { rx, ry } = computeImageNormalizedPoint(e.currentTarget, e.clientX, e.clientY);
+      const firstPt: PageAnnotationPoint = { x: rx, y: ry };
+      strokeDraftRef.current = {
+        pointerId: e.pointerId,
+        pageNum,
+        type: activePenTool,
+        points: [firstPt],
+        totalDist: 0,
+      };
+      setDraftStroke({ pageNum, type: activePenTool, points: [firstPt] });
+    },
+    [activePenTool, numPages]
+  );
+
+  const handlePageSurfacePointerMove = useCallback(
+    (pageNum: number, e: React.PointerEvent<HTMLElement>) => {
+      const draft = strokeDraftRef.current;
+      if (!draft || draft.pointerId !== e.pointerId || draft.pageNum !== pageNum) return;
+      const { rx, ry } = computeImageNormalizedPoint(e.currentTarget, e.clientX, e.clientY);
+      const prev = draft.points[draft.points.length - 1];
+      const seg = Math.hypot(rx - prev.x, ry - prev.y);
+      if (seg < 0.004) return;
+      draft.points.push({ x: rx, y: ry });
+      draft.totalDist += seg;
+      setDraftStroke({ pageNum, type: draft.type, points: [...draft.points] });
+    },
+    []
+  );
+
+  const handlePageSurfacePointerUp = useCallback(
+    (pageNum: number, e: React.PointerEvent<HTMLElement>) => {
+      const draft = strokeDraftRef.current;
+      if (draft && draft.pointerId === e.pointerId) {
+        e.stopPropagation();
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+        strokeDraftRef.current = null;
+        setDraftStroke(null);
+        suppressClickUntilRef.current = performance.now() + 360;
+        if (draft.totalDist < 0.022 || draft.points.length < 2) {
+          const origin = draft.points[0];
+          if (origin) {
+            toggleAnnotationAtPoint(draft.type, pageNum, origin.x, origin.y);
+          }
+        } else {
+          addFreehandAnnotation(draft.type, pageNum, draft.points);
+        }
+        return;
+      }
+      handlePageTapPointerUp(pageNum, e);
+    },
+    [addFreehandAnnotation, handlePageTapPointerUp, toggleAnnotationAtPoint]
   );
 
   useEffect(() => {
@@ -4745,6 +6350,7 @@ export function FlipBookReader({
 
   const turnNext = useCallback(() => {
     if (currentSpread >= totalLeaves) return;
+    setTapMenu(null);
     hasInteractedRef.current = true;
     const turningLeaf = currentSpread;
     setActiveFlipLeaf(turningLeaf);
@@ -4755,6 +6361,7 @@ export function FlipBookReader({
 
   const turnPrev = useCallback(() => {
     if (currentSpread <= 0) return;
+    setTapMenu(null);
     hasInteractedRef.current = true;
     const turningLeaf = currentSpread - 1;
     setActiveFlipLeaf(turningLeaf);
@@ -4769,6 +6376,12 @@ export function FlipBookReader({
       if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) {
         return;
       }
+      if (e.key === 'Escape' && activePenTool && !tapMenu && !focusAnchor) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setActivePenTool(null);
+        return;
+      }
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         turnNext();
@@ -4779,7 +6392,7 @@ export function FlipBookReader({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [turnNext, turnPrev]);
+  }, [activePenTool, focusAnchor, tapMenu, turnNext, turnPrev]);
 
   function handleJumpSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -4852,11 +6465,18 @@ export function FlipBookReader({
     }
     if (pageImages[pageNum]) {
       return (
-        <img
+        <SpreadPageSurface
           src={pageImages[pageNum]}
           alt={`Page ${pageNum}`}
-          draggable={false}
-          className="w-full h-full object-contain select-none p-2 sm:p-3 cursor-zoom-in"
+          annotations={annotations.filter((item) => item.pageNum === pageNum)}
+          freshIds={freshAnnotationIds}
+          interactiveAnnotations={activePenTool === null}
+          draftStroke={
+            draftStroke && draftStroke.pageNum === pageNum
+              ? { type: draftStroke.type, points: draftStroke.points }
+              : null
+          }
+          onRemoveAnnotation={removeAnnotationById}
         />
       );
     }
@@ -4885,17 +6505,33 @@ export function FlipBookReader({
           <p className="mt-1 text-sm text-white/80">{docError}</p>
         </div>
       ) : singleZoom ? (
-        <div className="w-[min(94vw,900px)] h-[min(64dvh,690px)] sm:w-[min(92vw,900px)] sm:h-[min(78dvh,690px)] bg-[#141210] rounded-xl p-2 sm:p-3 shadow-2xl flex flex-col">
+        <div
+          style={
+            bindingTheme
+              ? {
+                  background: `linear-gradient(145deg, ${bindingTheme.boardHi} 0%, ${bindingTheme.boardLo} 100%)`,
+                  boxShadow: `0 25px 50px -12px rgba(0, 0, 0, 0.72), inset 0 1px 0 ${bindingTheme.boardBorder}`,
+                }
+              : undefined
+          }
+          className="w-[min(94vw,900px)] h-[min(64dvh,690px)] sm:w-[min(92vw,900px)] sm:h-[min(78dvh,690px)] bg-[#141210] rounded-xl p-2 sm:p-3 shadow-2xl flex flex-col transition-colors duration-500"
+        >
           <div className="flex-1 overflow-y-auto bg-[#e9e5dc] rounded p-2.5 sm:p-4 space-y-3 sm:space-y-4">
             {zoomedLeftPage ? (
               <div
-                className="relative bg-white shadow mx-auto max-w-2xl cursor-zoom-in"
-                title="Double-click to focus & read"
+                className={`folio-pen-surface relative bg-white shadow mx-auto max-w-2xl ${
+                  activePenTool ? 'touch-none' : ''
+                }`}
+                title={activePenTool ? 'Drag or tap with pen' : 'Double-click for page options'}
                 onDoubleClick={(e) => {
+                  if (activePenTool) return;
                   e.stopPropagation();
-                  openPageFocus(zoomedLeftPage, e.clientX, e.clientY, e.currentTarget);
+                  openTapOptionsMenu(zoomedLeftPage, e.clientX, e.clientY, e.currentTarget);
                 }}
-                onPointerUp={(e) => handlePageTapPointerUp(zoomedLeftPage, e)}
+                onPointerDown={(e) => handlePageSurfacePointerDown(zoomedLeftPage, e)}
+                onPointerMove={(e) => handlePageSurfacePointerMove(zoomedLeftPage, e)}
+                onPointerUp={(e) => handlePageSurfacePointerUp(zoomedLeftPage, e)}
+                onPointerCancel={(e) => handlePageSurfacePointerUp(zoomedLeftPage, e)}
               >
                 {keeperRevealed && displayKeptOnLeft && displayKeptPage !== null ? (
                   <button
@@ -4920,12 +6556,25 @@ export function FlipBookReader({
                   </button>
                 ) : null}
                 {pageImages[zoomedLeftPage] ? (
-                  <img
-                    src={pageImages[zoomedLeftPage]}
-                    alt={`Page ${zoomedLeftPage}`}
-                    draggable={false}
-                    className="w-full h-auto block select-none"
-                  />
+                  <>
+                    <img
+                      src={pageImages[zoomedLeftPage]}
+                      alt={`Page ${zoomedLeftPage}`}
+                      draggable={false}
+                      className="w-full h-auto block select-none"
+                    />
+                    <PageAnnotationsLayer
+                      annotations={annotations.filter((item) => item.pageNum === zoomedLeftPage)}
+                      freshIds={freshAnnotationIds}
+                      interactive={activePenTool === null}
+                      draftStroke={
+                        draftStroke && draftStroke.pageNum === zoomedLeftPage
+                          ? { type: draftStroke.type, points: draftStroke.points }
+                          : null
+                      }
+                      onRemove={removeAnnotationById}
+                    />
+                  </>
                 ) : (
                   <div className="py-24 text-center text-xs text-[#78716C]">
                     Rendering Page {zoomedLeftPage}...
@@ -4935,13 +6584,19 @@ export function FlipBookReader({
             ) : null}
             {zoomedRightPage ? (
               <div
-                className="relative bg-white shadow mx-auto max-w-2xl cursor-zoom-in"
-                title="Double-click to focus & read"
+                className={`folio-pen-surface relative bg-white shadow mx-auto max-w-2xl ${
+                  activePenTool ? 'touch-none' : ''
+                }`}
+                title={activePenTool ? 'Drag or tap with pen' : 'Double-click for page options'}
                 onDoubleClick={(e) => {
+                  if (activePenTool) return;
                   e.stopPropagation();
-                  openPageFocus(zoomedRightPage, e.clientX, e.clientY, e.currentTarget);
+                  openTapOptionsMenu(zoomedRightPage, e.clientX, e.clientY, e.currentTarget);
                 }}
-                onPointerUp={(e) => handlePageTapPointerUp(zoomedRightPage, e)}
+                onPointerDown={(e) => handlePageSurfacePointerDown(zoomedRightPage, e)}
+                onPointerMove={(e) => handlePageSurfacePointerMove(zoomedRightPage, e)}
+                onPointerUp={(e) => handlePageSurfacePointerUp(zoomedRightPage, e)}
+                onPointerCancel={(e) => handlePageSurfacePointerUp(zoomedRightPage, e)}
               >
                 {keeperRevealed && displayKeptOnRight && displayKeptPage !== null ? (
                   <button
@@ -4966,12 +6621,25 @@ export function FlipBookReader({
                   </button>
                 ) : null}
                 {pageImages[zoomedRightPage] ? (
-                  <img
-                    src={pageImages[zoomedRightPage]}
-                    alt={`Page ${zoomedRightPage}`}
-                    draggable={false}
-                    className="w-full h-auto block select-none"
-                  />
+                  <>
+                    <img
+                      src={pageImages[zoomedRightPage]}
+                      alt={`Page ${zoomedRightPage}`}
+                      draggable={false}
+                      className="w-full h-auto block select-none"
+                    />
+                    <PageAnnotationsLayer
+                      annotations={annotations.filter((item) => item.pageNum === zoomedRightPage)}
+                      freshIds={freshAnnotationIds}
+                      interactive={activePenTool === null}
+                      draftStroke={
+                        draftStroke && draftStroke.pageNum === zoomedRightPage
+                          ? { type: draftStroke.type, points: draftStroke.points }
+                          : null
+                      }
+                      onRemove={removeAnnotationById}
+                    />
+                  </>
                 ) : (
                   <div className="py-24 text-center text-xs text-[#78716C]">
                     Rendering Page {zoomedRightPage}...
@@ -4983,8 +6651,13 @@ export function FlipBookReader({
         </div>
       ) : (
         <div
+          style={getBookBindingCssVars(bindingTheme)}
           className={`bookWrapper ${coverOpened ? 'is-spread-open' : ''}`}
           onTouchStart={(e) => {
+            if (activePenTool !== null) {
+              spreadSwipeRef.current = null;
+              return;
+            }
             if (e.touches.length === 1) {
               spreadSwipeRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
             } else {
@@ -4992,6 +6665,10 @@ export function FlipBookReader({
             }
           }}
           onTouchEnd={(e) => {
+            if (activePenTool !== null) {
+              spreadSwipeRef.current = null;
+              return;
+            }
             const start = spreadSwipeRef.current;
             spreadSwipeRef.current = null;
             if (!start || e.changedTouches.length !== 1) return;
@@ -5061,7 +6738,7 @@ export function FlipBookReader({
                           key={k}
                           style={{ zIndex }}
                           onClick={(e) => {
-                            if (performance.now() < suppressClickUntilRef.current) {
+                            if (activePenTool !== null || performance.now() < suppressClickUntilRef.current) {
                               return;
                             }
                             if (e.detail >= 2) {
@@ -5086,14 +6763,17 @@ export function FlipBookReader({
                           className={`flip-page ${isFlipped ? 'is-flipped' : 'is-right'}`}
                         >
                           <div
-                            className="pageFace front"
+                            className={`pageFace front folio-pen-surface ${activePenTool ? 'touch-none' : ''}`}
                             onDoubleClick={(e) => {
-                              if (frontPageNum <= numPages) {
+                              if (activePenTool === null && frontPageNum <= numPages) {
                                 e.stopPropagation();
-                                openPageFocus(frontPageNum, e.clientX, e.clientY, e.currentTarget);
+                                openTapOptionsMenu(frontPageNum, e.clientX, e.clientY, e.currentTarget);
                               }
                             }}
-                            onPointerUp={(e) => handlePageTapPointerUp(frontPageNum, e)}
+                            onPointerDown={(e) => handlePageSurfacePointerDown(frontPageNum, e)}
+                            onPointerMove={(e) => handlePageSurfacePointerMove(frontPageNum, e)}
+                            onPointerUp={(e) => handlePageSurfacePointerUp(frontPageNum, e)}
+                            onPointerCancel={(e) => handlePageSurfacePointerUp(frontPageNum, e)}
                           >
                             {renderPageContent(frontPageNum, 'Blank Endpaper')}
                             <span className="absolute bottom-2 right-3 text-[10px] font-mono tabular-nums text-[#78716C]/80 pointer-events-none">
@@ -5103,14 +6783,17 @@ export function FlipBookReader({
                           </div>
 
                           <div
-                            className="pageFace back"
+                            className={`pageFace back folio-pen-surface ${activePenTool ? 'touch-none' : ''}`}
                             onDoubleClick={(e) => {
-                              if (backPageNum <= numPages) {
+                              if (activePenTool === null && backPageNum <= numPages) {
                                 e.stopPropagation();
-                                openPageFocus(backPageNum, e.clientX, e.clientY, e.currentTarget);
+                                openTapOptionsMenu(backPageNum, e.clientX, e.clientY, e.currentTarget);
                               }
                             }}
-                            onPointerUp={(e) => handlePageTapPointerUp(backPageNum, e)}
+                            onPointerDown={(e) => handlePageSurfacePointerDown(backPageNum, e)}
+                            onPointerMove={(e) => handlePageSurfacePointerMove(backPageNum, e)}
+                            onPointerUp={(e) => handlePageSurfacePointerUp(backPageNum, e)}
+                            onPointerCancel={(e) => handlePageSurfacePointerUp(backPageNum, e)}
                           >
                             {renderPageContent(backPageNum, 'End of Volume')}
                             <span className="absolute bottom-2 left-3 text-[10px] font-mono tabular-nums text-[#78716C]/80 pointer-events-none">
@@ -5130,11 +6813,31 @@ export function FlipBookReader({
                       coverFading ? 'is-settled' : ''
                     }`}
                   >
-                    <div className="pageFace front cover-sheen bg-[#22252d] flex items-center justify-center border-l border-black/40 rounded-r-[10px]">
+                    <div
+                      style={bindingTheme ? { backgroundColor: bindingTheme.coverBg } : undefined}
+                      className="pageFace front cover-sheen bg-[#22252d] flex items-center justify-center border-l border-black/40 rounded-r-[10px]"
+                    >
                       {book.coverPath || coverPreviewUrl || pageImages[1] ? (
                         <img
                           src={book.coverPath || coverPreviewUrl || pageImages[1] || ''}
                           alt=""
+                          crossOrigin={
+                            isCrossOriginUrl(book.coverPath || coverPreviewUrl || '') &&
+                            Boolean(apiBaseUrl) &&
+                            (coverPreviewUrl || '').startsWith(apiBaseUrl!.trim().replace(/\/+$/, ''))
+                              ? 'anonymous'
+                              : undefined
+                          }
+                          onLoad={(e) => {
+                            if (!bindingTheme) {
+                              const extracted = extractBookBindingThemeFromImage(
+                                e.currentTarget,
+                                book.id,
+                                book.sizeBytes
+                              );
+                              if (extracted) setBindingTheme(extracted);
+                            }
+                          }}
                           onError={() => {
                             if (coverPreviewUrl && !coverPreviewUrl.startsWith('data:')) {
                               setCoverPreviewUrl(pageImages[1] || null);
@@ -5317,6 +7020,41 @@ export function FlipBookReader({
               </button>
             ) : null}
 
+            <div
+              role="group"
+              aria-label="Fountain pen tools"
+              className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md bg-black/45 border border-white/10 backdrop-blur-md"
+            >
+              <button
+                type="button"
+                aria-pressed={activePenTool === 'mark'}
+                onClick={() => setActivePenTool((prev) => (prev === 'mark' ? null : 'mark'))}
+                title={activePenTool === 'mark' ? 'Exit Mark pen' : 'Arm Mark highlighter pen'}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border transition-colors whitespace-nowrap cursor-pointer ${
+                  activePenTool === 'mark'
+                    ? 'bg-amber-400/20 border-amber-300/60 text-amber-200'
+                    : 'border-transparent text-white/75 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <Highlighter className="w-3.5 h-3.5 text-amber-300" />
+                <span>Mark</span>
+              </button>
+              <button
+                type="button"
+                aria-pressed={activePenTool === 'circle'}
+                onClick={() => setActivePenTool((prev) => (prev === 'circle' ? null : 'circle'))}
+                title={activePenTool === 'circle' ? 'Exit Circle pen' : 'Arm Circle ink pen'}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border transition-colors whitespace-nowrap cursor-pointer ${
+                  activePenTool === 'circle'
+                    ? 'bg-rose-500/25 border-rose-300/60 text-rose-200'
+                    : 'border-transparent text-white/75 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <Circle className="w-3.5 h-3.5 text-rose-300" />
+                <span>Circle</span>
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={() => setSingleZoom((prev) => !prev)}
@@ -5340,6 +7078,33 @@ export function FlipBookReader({
         </div>
       ) : null}
 
+      <FolioPenCursor
+        active={!closing && !docError && numPages > 0 && !tapMenu}
+        mode={activePenTool ?? 'read'}
+      />
+
+      {tapMenu && numPages > 0 ? (
+        <DoubleTapFabMenu
+          anchor={tapMenu}
+          onClose={() => setTapMenu(null)}
+          onZoom={() => {
+            const target = tapMenu;
+            setTapMenu(null);
+            openPageFocusAtNormalized(target.pageNum, target.rx, target.ry);
+          }}
+          onMark={() => {
+            const target = tapMenu;
+            setTapMenu(null);
+            toggleAnnotationAtPoint('mark', target.pageNum, target.rx, target.ry);
+          }}
+          onCircle={() => {
+            const target = tapMenu;
+            setTapMenu(null);
+            toggleAnnotationAtPoint('circle', target.pageNum, target.rx, target.ry);
+          }}
+        />
+      ) : null}
+
       {focusAnchor && numPages > 0 ? (
         <FocusedPageOverlay
           anchor={focusAnchor}
@@ -5349,6 +7114,13 @@ export function FlipBookReader({
           pageErrors={pageErrors}
           keptPage={displayKeptPage ?? keptPage}
           keeperColor={activeKeeperColor}
+          annotations={annotations.filter((item) => item.pageNum === focusAnchor.pageNum)}
+          freshIds={freshAnnotationIds}
+          activePenTool={activePenTool}
+          onChangePenTool={setActivePenTool}
+          onAddStamp={toggleAnnotationAtPoint}
+          onAddStroke={addFreehandAnnotation}
+          onRemoveAnnotation={removeAnnotationById}
           onToggleBookmark={(pageNum) => toggleBookKeeperAtPage(pageNum)}
           onSelectKeeperColor={(color, pageNum) => selectKeeperColorAtPage(color, pageNum)}
           onRequestHiRes={(pageNum) => {
@@ -5381,6 +7153,7 @@ interface PdfReaderModalProps {
   book: VaultBook | null;
   originRect: PocketOriginRect | null;
   apiBaseUrl?: string;
+  pdfAssetsBaseUrl?: string;
   hasBackend?: boolean;
   onClose: () => void;
   onUpdate: (updated: VaultBook) => void;
@@ -5397,6 +7170,7 @@ export function PdfReaderModal({
   book,
   originRect,
   apiBaseUrl,
+  pdfAssetsBaseUrl,
   hasBackend = true,
   onClose,
   onUpdate,
@@ -5609,6 +7383,7 @@ export function PdfReaderModal({
             originRect={originRect}
             closing={closing}
             apiBaseUrl={apiBaseUrl}
+            pdfAssetsBaseUrl={pdfAssetsBaseUrl}
             hasBackend={hasBackend}
             onBookUpdate={onUpdate}
           />
@@ -5736,6 +7511,7 @@ interface FloatingBookSlotProps {
   depth: number;
   priority: boolean;
   apiBaseUrl?: string;
+  pdfAssetsBaseUrl?: string;
   hasBackend: boolean;
   onSelect: (book: VaultBook, buttonEl: HTMLButtonElement) => void;
 }
@@ -5745,6 +7521,7 @@ function FloatingBookSlot({
   depth,
   priority,
   apiBaseUrl,
+  pdfAssetsBaseUrl,
   hasBackend,
   onSelect,
 }: FloatingBookSlotProps) {
@@ -5755,6 +7532,9 @@ function FloatingBookSlot({
   const [isLocked, setIsLocked] = useState(true);
   const [rattleNonce, setRattleNonce] = useState(0);
   const [isRattling, setIsRattling] = useState(false);
+  const [bindingTheme, setBindingTheme] = useState<BookBindingTheme | null>(() =>
+    getCachedBookBindingTheme(book.id, book.sizeBytes)
+  );
 
   useEffect(() => {
     const node = slotRef.current;
@@ -5822,7 +7602,10 @@ function FloatingBookSlot({
           aria-label={isLocked ? `${labelText} — Locked` : `Open ${labelText}`}
           className="air-book-hit focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1a6064] rounded-md"
         >
-          <div className="air-book-body">
+          <div
+            className="air-book-body"
+            style={!isLocked ? getBookBindingCssVars(bindingTheme) : undefined}
+          >
             <span className="air-book-shadow-plane" aria-hidden="true" />
             <span className="air-book-back" aria-hidden="true" />
             <span className="air-book-spine" aria-hidden="true" />
@@ -5847,11 +7630,13 @@ function FloatingBookSlot({
                 coverPath={book.coverPath}
                 sourceUrl={book.sourceUrl}
                 apiBaseUrl={apiBaseUrl}
+                pdfAssetsBaseUrl={pdfAssetsBaseUrl}
                 hasBackend={hasBackend}
                 priority={priority}
                 inView={inView}
                 rattleTrigger={rattleNonce}
                 onLockedChange={setIsLocked}
+                onBindingTheme={setBindingTheme}
               />
             </div>
           </div>
@@ -5868,6 +7653,7 @@ interface VaultApiPayload {
 
 export function FolioVaultPlugin({
   apiBaseUrl,
+  pdfAssetsBaseUrl,
   books: externalBooks,
   showBackground = true,
   allowDelete = true,
@@ -5881,7 +7667,7 @@ export function FolioVaultPlugin({
       ? [...externalBooks].sort((a, b) => a.title.localeCompare(b.title))
       : []
   );
-  const [hasBackend, setHasBackend] = useState(!externalBooks);
+  const [hasBackend, setHasBackend] = useState(!externalBooks || Boolean(apiBaseUrl));
   const [loading, setLoading] = useState(!externalBooks);
   const [error, setError] = useState<string | null>(null);
 
@@ -5904,7 +7690,7 @@ export function FolioVaultPlugin({
     if (externalBooks) {
       const sorted = [...externalBooks].sort((a, b) => a.title.localeCompare(b.title));
       setBooks(sorted);
-      setHasBackend(false);
+      setHasBackend(Boolean(apiBaseUrl));
       setLoading(false);
       setError(null);
       onBooksLoadedRef.current?.(sorted);
@@ -6050,6 +7836,7 @@ export function FolioVaultPlugin({
                   depth={DEPTH_PLANES[idx % DEPTH_PLANES.length]}
                   priority={idx < 12}
                   apiBaseUrl={apiBaseUrl}
+                  pdfAssetsBaseUrl={pdfAssetsBaseUrl}
                   hasBackend={hasBackend}
                   onSelect={(selected, buttonEl) => {
                     const coverNode = buttonEl.querySelector('.air-book-cover');
@@ -6073,6 +7860,7 @@ export function FolioVaultPlugin({
           book={activeBook}
           originRect={originRect}
           apiBaseUrl={apiBaseUrl}
+          pdfAssetsBaseUrl={pdfAssetsBaseUrl}
           hasBackend={hasBackend}
           onClose={() => {
             setActiveBook(null);
